@@ -9,9 +9,10 @@ output, and calculated USD cost. Cached input and cache writes are details of
 input processing; they are not added to the input total. Missing provider
 details count as zero.
 
-In terminal mode, cumulative process usage is printed after each model call.
-When stdout is a terminal, labels and values may be colored; redirected output
-and `NO_COLOR` use this exact plain-text form:
+In terminal mode, cumulative process usage is printed once after each turn
+completes (not after intermediate tool-loop model calls). When stdout is a
+terminal, labels and values may be colored; redirected output and `NO_COLOR`
+use this exact plain-text form:
 
 ```text
 Usage  Input: 12,345  Cached: 8,192  Writes: 4,096  Output: 1,024  Cost: $0.65

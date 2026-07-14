@@ -124,7 +124,7 @@ def main() -> None:
         model_name=model_name,
         on_output=lambda content: print(f"\nAgent: {content}"),
         on_tool_output=lambda content: print(f"\n{content}", end=""),
-        on_usage=print_usage,
+        on_turn_complete=print_usage,
         show_tool_output=args.tooloutput,
         custom_instructions=custom_instructions,
         tool_instructions=tool_instructions,

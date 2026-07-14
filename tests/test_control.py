@@ -16,6 +16,14 @@ You have direct access to the local filesystem through bash. When the user asks
 you to inspect, search, or summarize local files, use bash to do the work
 yourself. Never claim that you cannot access those files or ask the user to run
 commands for you. Do not modify files unless the user requests a change.
+
+## Custom Instructions
+
+
+
+# Available Tools
+
+
 """
 
 
@@ -118,13 +126,12 @@ def test_default_prompt_is_unchanged() -> None:
     assert load_system_prompt() == EXPECTED_DEFAULT_PROMPT
 
 
-def test_custom_instructions_are_appended_to_default_prompt() -> None:
+def test_custom_instructions_replace_placeholder() -> None:
     prompt = load_system_prompt("Always answer briefly.")
 
-    assert prompt.startswith(EXPECTED_DEFAULT_PROMPT.rstrip())
-    assert prompt.endswith(
-        "## Custom Instructions\n\nAlways answer briefly.\n"
-    )
+    assert "## Custom Instructions\n\nAlways answer briefly.\n\n# Available Tools" in prompt
+    assert "{{CUSTOM_INSTRUCTIONS}}" not in prompt
+    assert "{{TOOLS}}" not in prompt
 
 
 def test_response_model_allows_text_and_preserves_reasoning_items() -> None:
@@ -154,16 +161,19 @@ def test_response_model_allows_text_and_preserves_reasoning_items() -> None:
     ]
 
 
-def test_tool_instructions_are_appended_with_custom_instructions() -> None:
+def test_tool_instructions_replace_placeholder_with_custom_instructions() -> None:
     prompt = load_system_prompt(
         "Always answer briefly.",
-        "# Available Tools\n\n## `things`\n\nUse `things list`.",
+        "### `things`\n\nUse `things list`.",
     )
 
     assert (
         "## Custom Instructions\n\nAlways answer briefly.\n\n"
-        "# Available Tools\n\n## `things`\n\nUse `things list`."
+        "# Available Tools\n\n"
+        "### `things`\n\nUse `things list`."
     ) in prompt
+    assert "{{CUSTOM_INSTRUCTIONS}}" not in prompt
+    assert "{{TOOLS}}" not in prompt
 
 
 def test_control_writes_only_conversation_text() -> None:
@@ -209,6 +219,37 @@ def test_control_accumulates_response_usage() -> None:
     assert updates[-1].cache_write_tokens == 30
     assert updates[-1].output_tokens == 15
     assert updates[-1].cost == 0.125
+
+
+def test_control_reports_usage_per_call_and_once_per_turn() -> None:
+    per_call = []
+    per_turn = []
+
+    class MultiCallModel(ToolModel):
+        def query(self, messages):
+            response = super().query(messages)
+            response["usage"] = {
+                "input_tokens": 100 * self.calls,
+                "output_tokens": 10 * self.calls,
+            }
+            response.setdefault("extra", {})["cost"] = 0.1 * self.calls
+            return response
+
+    control = Control(
+        Path.cwd(),
+        on_usage=per_call.append,
+        on_turn_complete=per_turn.append,
+    )
+    control.model = MultiCallModel()
+    control.environment = FakeEnvironment()
+
+    control.run_turn("Use a tool")
+
+    assert len(per_call) == 2
+    assert len(per_turn) == 1
+    assert per_turn[0].input_tokens == 300
+    assert per_turn[0].output_tokens == 30
+    assert abs(per_turn[0].cost - 0.3) < 1e-9
 
 
 def test_console_ctrl_c_interrupts_and_returns_to_prompt(

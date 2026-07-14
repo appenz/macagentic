@@ -15,7 +15,9 @@ safe per-user symlinks in `~/.local/bin`; ensure that directory is on `PATH`.
 Remove this project's links with `make uninstall-tools`.
 
 `make run` and `make runui` regenerate `.build/tools.md` from each tool's
-`PROMPT.md` and append it to the system prompt. They do not install tools.
+`PROMPT.md` and substitute it into the `{{TOOLS}}` placeholder in the system
+prompt (`# Available Tools` lives in the prompt file). Custom instructions
+fill `{{CUSTOM_INSTRUCTIONS}}`. They do not install tools.
 Validate tool layouts with `make check-tools` and run only tool tests with
 `make test-tools`.
 
@@ -51,7 +53,7 @@ make run ARGS="--task-file tasks/example.md"
 make runui ARGS="--task-file tasks/example.md"
 ```
 
-Append custom system instructions without changing the default prompt:
+Fill `{{CUSTOM_INSTRUCTIONS}}` in the default prompt without editing the file:
 
 ```sh
 make run ARGS="--instructions path/to/instructions.md"
@@ -59,7 +61,7 @@ make runui ARGS="--instructions path/to/instructions.md"
 ```
 
 The base prompt lives in `macagentic/agent/prompts/default.md`. With no
-`--instructions` argument, loading it preserves the existing behavior.
+`--instructions` argument, `{{CUSTOM_INSTRUCTIONS}}` is left empty.
 
 Project defaults are loaded from `config/config.toml`. Override any value in
 `~/.config/macagentic/config.toml`; user values win recursively. Supported
@@ -77,4 +79,4 @@ supported when `openai_api_key` is not set in TOML.
 Models use LiteLLM's native Responses API. Configure ordinary provider model
 IDs such as `openai/gpt-5.6-terra`; do not add an `openai/responses/` bridge
 prefix. Terminal runs print cumulative input, cache, output, and cost usage
-after every model call. UI tabs show the same cumulative usage in the top bar.
+once after each turn. UI tabs show live cumulative usage in the top bar.

@@ -13,6 +13,8 @@ from macagentic.agent.transcript import Transcript
 from macagentic.agent.usage import UsageAccumulator, UsageSnapshot
 
 DEFAULT_PROMPT_PATH = Path(__file__).parent / "prompts" / "default.md"
+CUSTOM_INSTRUCTIONS_PLACEHOLDER = "{{CUSTOM_INSTRUCTIONS}}"
+TOOLS_PLACEHOLDER = "{{TOOLS}}"
 
 PermissionCallback = Callable[[str], bool]
 ClarificationCallback = Callable[[str], str | None]
@@ -41,21 +43,28 @@ def load_system_prompt(
     custom_instructions: str | None = None,
     tool_instructions: str | None = None,
 ) -> str:
-    base_prompt = DEFAULT_PROMPT_PATH.read_text()
-    sections = []
-    if custom_instructions and custom_instructions.strip():
-        sections.append(
-            "## Custom Instructions\n\n"
-            f"{custom_instructions.strip()}"
+    prompt = DEFAULT_PROMPT_PATH.read_text()
+    missing = [
+        name
+        for name, placeholder in (
+            ("custom instructions", CUSTOM_INSTRUCTIONS_PLACEHOLDER),
+            ("tools", TOOLS_PLACEHOLDER),
         )
-    if tool_instructions and tool_instructions.strip():
-        sections.append(tool_instructions.strip())
-    if not sections:
-        return base_prompt
+        if placeholder not in prompt
+    ]
+    if missing:
+        raise ValueError(
+            "System prompt missing placeholder(s): "
+            + ", ".join(missing)
+        )
     return (
-        f"{base_prompt.rstrip()}\n\n"
-        + "\n\n".join(sections)
-        + "\n"
+        prompt.replace(
+            CUSTOM_INSTRUCTIONS_PLACEHOLDER,
+            (custom_instructions or "").strip(),
+        ).replace(
+            TOOLS_PLACEHOLDER,
+            (tool_instructions or "").strip(),
+        )
     )
 
 
@@ -71,6 +80,7 @@ class Control:
         on_output: OutputCallback | None = None,
         on_tool_output: ToolOutputCallback | None = None,
         on_usage: UsageCallback | None = None,
+        on_turn_complete: UsageCallback | None = None,
         show_tool_output: bool = False,
         ask_permission: PermissionCallback | None = None,
         ask_clarification: ClarificationCallback | None = None,
@@ -85,6 +95,7 @@ class Control:
         self.on_output = on_output
         self.on_tool_output = on_tool_output
         self.on_usage = on_usage
+        self.on_turn_complete = on_turn_complete
         self.show_tool_output = show_tool_output
         self.ask_permission_callback = ask_permission
         self.ask_clarification_callback = ask_clarification
@@ -127,7 +138,11 @@ class Control:
 
             self.transcript.write(f"**You:** {user_message}\n\n")
             self.messages.append({"role": "user", "content": user_message})
-            self._run_agent_turn(run_id)
+            try:
+                self._run_agent_turn(run_id)
+            finally:
+                if self.on_turn_complete is not None:
+                    self.on_turn_complete(self.usage.snapshot())
 
     def start(self, first_message: str) -> None:
         previous_handler = signal.getsignal(signal.SIGINT)
