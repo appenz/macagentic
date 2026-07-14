@@ -1,6 +1,45 @@
-from Cocoa import NSColor, NSParagraphStyleAttributeName
+from Cocoa import (
+    NSColor,
+    NSFontAttributeName,
+    NSLineBreakByTruncatingTail,
+    NSParagraphStyleAttributeName,
+)
+from Foundation import NSString
 
-from macagentic.ui.markdown import MarkdownRenderer
+from macagentic.ui.markdown import (
+    BLOCK_GAP,
+    CODE_FONT_SIZE,
+    LINE_HEIGHT,
+    LIST_ITEM_SPACING,
+    PARAGRAPH_GAP,
+    MarkdownRenderer,
+)
+
+
+def _style_at(rendered, marker):
+    index = str(rendered.string()).index(marker)
+    style, _ = rendered.attribute_atIndex_effectiveRange_(
+        NSParagraphStyleAttributeName,
+        index,
+        None,
+    )
+    return style
+
+
+def _paragraph_styles(rendered):
+    text = NSString.stringWithString_(str(rendered.string()))
+    styles = []
+    position = 0
+    while position < rendered.length():
+        paragraph_range = text.paragraphRangeForRange_((position, 0))
+        style, _ = rendered.attribute_atIndex_effectiveRange_(
+            NSParagraphStyleAttributeName,
+            paragraph_range.location,
+            None,
+        )
+        styles.append(style)
+        position = paragraph_range.location + paragraph_range.length
+    return styles
 
 
 def test_markdown_renders_blocks_and_tables() -> None:
@@ -50,3 +89,120 @@ def test_markdown_lists_use_macllm_hanging_indents_and_spacing() -> None:
     assert style.paragraphSpacingBefore() == 3.5
     assert second_style.paragraphSpacing() == 3.5
     assert "Second item\nAfter" in text
+
+
+def test_markdown_uses_macllm_block_transition_spacing() -> None:
+    renderer = MarkdownRenderer()
+    color = NSColor.blackColor()
+
+    paragraph_heading = renderer.render(
+        "Intro\n\n## Heading",
+        color,
+    )
+    heading_paragraph = renderer.render(
+        "## Heading\n\nBody",
+        color,
+    )
+    list_heading = renderer.render(
+        "- Item\n\n## Heading",
+        color,
+    )
+    paragraph_list = renderer.render(
+        "Intro\n\n- Item",
+        color,
+    )
+
+    assert _style_at(
+        paragraph_heading,
+        "Heading",
+    ).paragraphSpacingBefore() == PARAGRAPH_GAP
+    assert _style_at(
+        heading_paragraph,
+        "Body",
+    ).paragraphSpacingBefore() == BLOCK_GAP
+    assert _style_at(
+        list_heading,
+        "Heading",
+    ).paragraphSpacingBefore() == PARAGRAPH_GAP
+    assert _style_at(
+        paragraph_list,
+        "Item",
+    ).paragraphSpacingBefore() == BLOCK_GAP
+
+
+def test_markdown_list_outer_and_internal_spacing_matches_macllm() -> None:
+    renderer = MarkdownRenderer()
+    rendered = renderer.render(
+        "Intro\n\n- One\n- Two\n- Three\n\nAfter",
+        NSColor.blackColor(),
+    )
+    styles = [style for style in _paragraph_styles(rendered) if style is not None]
+
+    assert styles[1].paragraphSpacingBefore() == BLOCK_GAP
+    assert styles[1].paragraphSpacing() == LIST_ITEM_SPACING
+    assert styles[2].paragraphSpacing() == LIST_ITEM_SPACING
+    assert styles[3].paragraphSpacing() == BLOCK_GAP
+    assert styles[4].paragraphSpacingBefore() == BLOCK_GAP
+
+
+def test_markdown_heading_typography_matches_macllm() -> None:
+    renderer = MarkdownRenderer()
+    rendered = renderer.render(
+        "# Title\n\n## Section\n\n### Subsection",
+        NSColor.blackColor(),
+    )
+    text = str(rendered.string())
+
+    expected = {
+        "Title": (16.0, 16.0 * 1.2),
+        "Section": (15.0, 15.0 * 1.2),
+        "Subsection": (14.0, LINE_HEIGHT),
+    }
+    for marker, (font_size, line_height) in expected.items():
+        index = text.index(marker)
+        font, _ = rendered.attribute_atIndex_effectiveRange_(
+            NSFontAttributeName,
+            index,
+            None,
+        )
+        style = _style_at(rendered, marker)
+        assert font.pointSize() == font_size
+        assert style.minimumLineHeight() == line_height
+        assert style.maximumLineHeight() == line_height
+
+
+def test_markdown_heavy_block_layout_matches_macllm() -> None:
+    renderer = MarkdownRenderer()
+    rendered = renderer.render(
+        "Intro\n\n| A |\n|---|\n| 1 |",
+        NSColor.blackColor(),
+    )
+    text = str(rendered.string())
+    table_index = text.index("A")
+    font, _ = rendered.attribute_atIndex_effectiveRange_(
+        NSFontAttributeName,
+        table_index,
+        None,
+    )
+    style = _style_at(rendered, "A")
+
+    assert font.pointSize() == CODE_FONT_SIZE
+    assert style.firstLineHeadIndent() == 8.0
+    assert style.headIndent() == 8.0
+    assert style.lineBreakMode() == NSLineBreakByTruncatingTail
+    assert style.paragraphSpacingBefore() == PARAGRAPH_GAP
+
+
+def test_markdown_links_and_table_alignment_match_macllm() -> None:
+    renderer = MarkdownRenderer()
+    links = renderer.render(
+        "Visit https://example.com or [docs](https://example.com/docs).",
+        NSColor.blackColor(),
+    )
+    table = renderer.render(
+        "| Name | Count |\n|---|---:|\n| A | 2 |\n| Longer | 10 |",
+        NSColor.blackColor(),
+    )
+
+    assert str(links.string()).count(" ↗") == 2
+    assert "A           2\nLonger     10" in str(table.string())
