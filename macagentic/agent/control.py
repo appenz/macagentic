@@ -9,12 +9,14 @@ from minisweagent import package_dir
 from minisweagent.models.litellm_response_model import LitellmResponseModel
 
 from macagentic.agent.environment import InterruptibleLocalEnvironment
+from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.transcript import Transcript
 from macagentic.agent.usage import UsageAccumulator, UsageSnapshot
 
 DEFAULT_PROMPT_PATH = Path(__file__).parent / "prompts" / "default.md"
 CUSTOM_INSTRUCTIONS_PLACEHOLDER = "{{CUSTOM_INSTRUCTIONS}}"
 TOOLS_PLACEHOLDER = "{{TOOLS}}"
+SKILLS_PLACEHOLDER = "{{SKILLS}}"
 
 PermissionCallback = Callable[[str], bool]
 ClarificationCallback = Callable[[str], str | None]
@@ -42,6 +44,7 @@ class ResponseModel(LitellmResponseModel):
 def load_system_prompt(
     custom_instructions: str | None = None,
     tool_instructions: str | None = None,
+    skill_catalog: SkillCatalog | None = None,
 ) -> str:
     prompt = DEFAULT_PROMPT_PATH.read_text()
     missing = [
@@ -49,6 +52,7 @@ def load_system_prompt(
         for name, placeholder in (
             ("custom instructions", CUSTOM_INSTRUCTIONS_PLACEHOLDER),
             ("tools", TOOLS_PLACEHOLDER),
+            ("skills", SKILLS_PLACEHOLDER),
         )
         if placeholder not in prompt
     ]
@@ -64,6 +68,9 @@ def load_system_prompt(
         ).replace(
             TOOLS_PLACEHOLDER,
             (tool_instructions or "").strip(),
+        ).replace(
+            SKILLS_PLACEHOLDER,
+            (skill_catalog or EMPTY_SKILL_CATALOG).render_prompt(),
         )
     )
 
@@ -86,6 +93,7 @@ class Control:
         ask_clarification: ClarificationCallback | None = None,
         custom_instructions: str | None = None,
         tool_instructions: str | None = None,
+        skill_catalog: SkillCatalog | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.model_name = model_name or os.getenv(
@@ -99,6 +107,7 @@ class Control:
         self.show_tool_output = show_tool_output
         self.ask_permission_callback = ask_permission
         self.ask_clarification_callback = ask_clarification
+        self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
 
         config = yaml.safe_load(
             (Path(package_dir) / "config" / "mini.yaml").read_text()
@@ -115,6 +124,7 @@ class Control:
                 "content": load_system_prompt(
                     custom_instructions,
                     tool_instructions,
+                    self.skill_catalog,
                 ),
             }
         ]
@@ -137,7 +147,10 @@ class Control:
                 self._cancel_event.clear()
 
             self.transcript.write(f"**You:** {user_message}\n\n")
-            self.messages.append({"role": "user", "content": user_message})
+            expanded_message = self.skill_catalog.expand_commands(user_message)
+            self.messages.append(
+                {"role": "user", "content": expanded_message}
+            )
             try:
                 self._run_agent_turn(run_id)
             finally:

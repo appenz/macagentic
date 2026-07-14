@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from macagentic.agent.control import Control, ResponseModel, load_system_prompt
+from macagentic.agent.skills import Skill, SkillCatalog
 from macagentic.agent.transcript import Transcript
 
 EXPECTED_DEFAULT_PROMPT = """You are an interactive coding assistant with access to a bash tool.
@@ -24,6 +25,11 @@ commands for you. Do not modify files unless the user requests a change.
 # Available Tools
 
 
+
+# Skills
+You have access to agent skills that help you fulfill tasks.
+Load skills by reading the file ~/.agents/skills/<skillname>/SKILL.md
+Below a list of skills, the format is <skill name> - Description.
 """
 
 
@@ -132,6 +138,7 @@ def test_custom_instructions_replace_placeholder() -> None:
     assert "## Custom Instructions\n\nAlways answer briefly.\n\n# Available Tools" in prompt
     assert "{{CUSTOM_INSTRUCTIONS}}" not in prompt
     assert "{{TOOLS}}" not in prompt
+    assert "{{SKILLS}}" not in prompt
 
 
 def test_response_model_allows_text_and_preserves_reasoning_items() -> None:
@@ -193,6 +200,35 @@ def test_control_writes_only_conversation_text() -> None:
     )
     assert outputs == ["The answer is **2**."]
     assert "tool" not in transcript.getvalue().lower()
+
+
+def test_control_expands_skill_for_model_but_not_transcript() -> None:
+    transcript = Transcript()
+    catalog = SkillCatalog(
+        (
+            Skill(
+                name="summarize",
+                description="Summarize text.",
+                body="Follow these summary instructions.",
+            ),
+        )
+    )
+    control = Control(
+        Path.cwd(),
+        transcript=transcript,
+        skill_catalog=catalog,
+    )
+    control.model = FakeModel()
+
+    control.run_turn("/summarize this document")
+
+    assert transcript.getvalue().startswith(
+        "**You:** /summarize this document\n\n"
+    )
+    assert control.messages[1] == {
+        "role": "user",
+        "content": "Follow these summary instructions. this document",
+    }
 
 
 def test_control_accumulates_response_usage() -> None:

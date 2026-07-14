@@ -15,3 +15,5 @@ commands for you. Do not modify files unless the user requests a change.
 # Available Tools
 
 {{TOOLS}}
+
+{{SKILLS}}

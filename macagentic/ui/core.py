@@ -52,6 +52,7 @@ from quickmachotkey import mask, quickHotKey
 from quickmachotkey.constants import kVK_Space, optionKey
 
 from macagentic.agent import Control, Transcript
+from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.usage import UsageSnapshot, display_model_name
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
 
@@ -334,6 +335,7 @@ class MacAgenticUI:
         screenshot_path: Path | None = None,
         custom_instructions: str | None = None,
         tool_instructions: str | None = None,
+        skill_catalog: SkillCatalog | None = None,
         show_tool_output: bool = False,
     ) -> None:
         self.workspace = workspace
@@ -342,6 +344,7 @@ class MacAgenticUI:
         self.screenshot_path = screenshot_path
         self.custom_instructions = custom_instructions
         self.tool_instructions = tool_instructions
+        self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
         self.show_tool_output = show_tool_output
         self.app = None
         self.window = None
@@ -409,6 +412,7 @@ class MacAgenticUI:
             on_usage=self._usage_changed,
             custom_instructions=self.custom_instructions,
             tool_instructions=self.tool_instructions,
+            skill_catalog=self.skill_catalog,
             show_tool_output=self.show_tool_output,
         )
         with self._tabs_lock:
