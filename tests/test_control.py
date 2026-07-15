@@ -307,18 +307,24 @@ def test_console_ctrl_c_interrupts_and_returns_to_prompt(
 
 
 def test_interrupt_releases_turn_blocked_on_model_query() -> None:
-    control = Control(Path.cwd())
+    control = Control(
+        Path.cwd(),
+        show_status=True,
+        status_summarizer=lambda _command, _message: "Working",
+    )
     model = BlockingModel()
     control.model = model
     turn = threading.Thread(target=control.run_turn, args=("Wait",))
     turn.start()
     assert model.started.wait(1)
+    assert "```status\nThinking\n```" in control.transcript.getvalue()
 
     control.interrupt()
     turn.join(1)
     model.release.set()
 
     assert not turn.is_alive()
+    assert "Thinking" not in control.transcript.getvalue()
     assert "Late response" not in control.transcript.getvalue()
 
 
@@ -378,6 +384,7 @@ def test_tool_output_is_visible_only_when_enabled() -> None:
     hidden.environment = FakeEnvironment()
     hidden.run_turn("Run it")
     assert "**Tool:**" not in hidden.transcript.getvalue()
+    assert "**Tool:** `printf 'hello\\n'` (exit 0)" in hidden.history.getvalue()
 
     visible = []
     control = Control(
@@ -397,3 +404,38 @@ def test_tool_output_is_visible_only_when_enabled() -> None:
         message.get("type") == "function_call_output"
         for message in control.messages
     )
+
+
+def test_tool_status_is_shown_before_the_result() -> None:
+    control = Control(
+        Path.cwd(),
+        show_status=True,
+        status_summarizer=lambda _command, _message: "Checking calendar",
+    )
+    control.model = ToolModel()
+    control.environment = FakeEnvironment()
+
+    control.run_turn("Check it")
+
+    transcript = control.transcript.getvalue()
+    assert "```status\nChecking calendar\n```" in transcript
+    assert transcript.index("Checking calendar") < transcript.index("Done.")
+    assert "Checking calendar" not in control.history.getvalue()
+    assert "**Tool:**" in control.history.getvalue()
+
+
+def test_tool_status_falls_back_when_summary_fails() -> None:
+    def fail(_command, _message):
+        raise RuntimeError("Unavailable")
+
+    control = Control(
+        Path.cwd(),
+        show_status=True,
+        status_summarizer=fail,
+    )
+    control.model = ToolModel()
+    control.environment = FakeEnvironment()
+
+    control.run_turn("Run it")
+
+    assert "```status\nRunning command\n```" in control.transcript.getvalue()

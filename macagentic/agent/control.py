@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import litellm
 import yaml
 from minisweagent import package_dir
 from minisweagent.models.litellm_response_model import LitellmResponseModel
@@ -23,6 +24,10 @@ ClarificationCallback = Callable[[str], str | None]
 OutputCallback = Callable[[str], None]
 ToolOutputCallback = Callable[[str], None]
 UsageCallback = Callable[[UsageSnapshot], None]
+StatusSummarizer = Callable[[str, str], str]
+
+STATUS_MODEL = "openai/gpt-5.4-nano"
+THINKING_STATUS = "```status\nThinking\n```\n\n"
 
 
 class ConsoleInterrupt(BaseException):
@@ -89,6 +94,8 @@ class Control:
         on_usage: UsageCallback | None = None,
         on_turn_complete: UsageCallback | None = None,
         show_tool_output: bool = False,
+        show_status: bool = False,
+        status_summarizer: StatusSummarizer | None = None,
         ask_permission: PermissionCallback | None = None,
         ask_clarification: ClarificationCallback | None = None,
         custom_instructions: str | None = None,
@@ -100,11 +107,14 @@ class Control:
             "MSWEA_MODEL_NAME", "openai/gpt-5-mini"
         )
         self.transcript = transcript or Transcript()
+        self.history = Transcript()
         self.on_output = on_output
         self.on_tool_output = on_tool_output
         self.on_usage = on_usage
         self.on_turn_complete = on_turn_complete
         self.show_tool_output = show_tool_output
+        self.show_status = show_status
+        self.status_summarizer = status_summarizer or _summarize_command
         self.ask_permission_callback = ask_permission
         self.ask_clarification_callback = ask_clarification
         self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
@@ -146,14 +156,19 @@ class Control:
                 run_id = self._run_id
                 self._cancel_event.clear()
 
-            self.transcript.write(f"**You:** {user_message}\n\n")
+            user_entry = f"**You:** {user_message}\n\n"
+            self.transcript.write(user_entry)
+            self.history.write(user_entry)
+            if self.show_status:
+                self.transcript.write(THINKING_STATUS)
             expanded_message = self.skill_catalog.expand_commands(user_message)
             self.messages.append(
                 {"role": "user", "content": expanded_message}
             )
             try:
-                self._run_agent_turn(run_id)
+                self._run_agent_turn(run_id, user_message)
             finally:
+                self.transcript.replace_last(THINKING_STATUS, "")
                 if self.on_turn_complete is not None:
                     self.on_turn_complete(self.usage.snapshot())
 
@@ -219,7 +234,7 @@ class Control:
         except (EOFError, KeyboardInterrupt):
             return None
 
-    def _run_agent_turn(self, run_id: int) -> None:
+    def _run_agent_turn(self, run_id: int, user_message: str) -> None:
         for _ in range(20):
             if self._is_cancelled(run_id):
                 return
@@ -229,12 +244,16 @@ class Control:
                 return
 
             self.messages.append(response)
+            actions = response["extra"]["actions"]
+            if not actions:
+                self.transcript.replace_last(THINKING_STATUS, "")
             if content := _assistant_text(response):
-                self.transcript.write(f"{content}\n\n")
+                assistant_entry = f"{content}\n\n"
+                self.transcript.write(assistant_entry)
+                self.history.write(assistant_entry)
                 if self.on_output is not None:
                     self.on_output(content)
 
-            actions = response["extra"]["actions"]
             if not actions:
                 return
 
@@ -242,15 +261,36 @@ class Control:
             for action in actions:
                 if self._is_cancelled(run_id):
                     return
+                if self.show_status:
+                    try:
+                        status = self.status_summarizer(
+                            str(action.get("command", "")),
+                            user_message,
+                        )
+                    except Exception:
+                        status = "Running command"
+                    status = (
+                        status.strip().splitlines()[0].replace("`", "")[:60]
+                        or "Running command"
+                    )
+                    if self._is_cancelled(run_id):
+                        return
+                    status_entry = f"```status\n{status}\n```\n\n"
+                    if not self.transcript.replace_last(
+                        THINKING_STATUS,
+                        status_entry,
+                    ):
+                        self.transcript.write(status_entry)
                 output = self.environment.execute(action)
                 outputs.append(output)
+                if self._is_cancelled(run_id):
+                    return
+                rendered = self._format_tool_output(action, output)
+                self.history.write(rendered)
                 if self.show_tool_output:
-                    rendered = self._format_tool_output(action, output)
                     self.transcript.write(rendered)
                     if self.on_tool_output is not None:
                         self.on_tool_output(rendered)
-                if self._is_cancelled(run_id):
-                    return
 
             self.messages.extend(
                 self.model.format_observation_messages(response, outputs)
@@ -345,6 +385,36 @@ class Control:
         last = self.messages[-1]
         if last.get("extra", {}).get("actions"):
             self.messages.pop()
+
+
+def _summarize_command(command: str, user_message: str) -> str:
+    response = litellm.responses(
+        model=STATUS_MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "Write a concise, user-facing progress update describing "
+                    "what the command is accomplishing, not how it works. "
+                    "Include the source and specific subject when available. "
+                    "Use a 4-9 word gerund phrase. Example: 'Reading Wikipedia "
+                    "article about Ada Lovelace'. Return only the update with "
+                    "no punctuation."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"User request:\n{user_message}\n\nCommand:\n{command}"
+                ),
+            },
+        ],
+        reasoning={"effort": "none"},
+        max_output_tokens=30,
+    )
+    if hasattr(response, "model_dump"):
+        response = response.model_dump()
+    return _assistant_text(response) or "Running command"
 
 
 def _assistant_text(response: dict) -> str | None:

@@ -22,12 +22,11 @@ the terminal.
 
 ## Architecture
 
-Each UI tab owns an in-memory, file-like Markdown stream. It is not a file on
-the macOS filesystem and is not persisted.
+Each UI tab owns an in-memory, file-like Markdown stream.
 
-The stream contains only user and assistant display text in order. It never
-contains tool calls, tool output, model payloads, reasoning metadata, agent
-steps, status events, or debug records.
+The stream contains user and assistant display text plus short, marked tool
+status events in order. It never contains model payloads, reasoning metadata,
+or debug records. Raw tool output appears only with `--tooloutput`.
 
 The UI renders the stream as one Markdown document. It does not reconstruct
 messages, query the agent, or maintain a second conversation representation.
@@ -41,10 +40,11 @@ the main thread.
 
 ## Sessions
 
-Tabs are session-only and are discarded when the application closes. Each tab
-owns an independent agent conversation, transcript stream, and input draft.
-Agent work may continue in background tabs, and input submitted to a running
-tab is queued for that tab.
+Each tab owns an independent agent conversation, transcript stream, and input
+draft. Closing a non-empty tab saves a debug-style Markdown history under
+`history.local/YYYY-MM-DD/`; application termination is not a persistence
+boundary. Agent work may continue in background tabs, and input submitted to a
+running tab is queued for that tab.
 
 Permission and clarification are exposed through two purpose-specific optional
 callbacks, keeping the agent-to-UI interface limited to blocking requests.

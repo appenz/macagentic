@@ -54,6 +54,7 @@ from quickmachotkey.constants import kVK_Space, optionKey
 from macagentic.agent import Control, Transcript
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.usage import UsageSnapshot, display_model_name
+from macagentic.history import save_history
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
 
 
@@ -414,6 +415,7 @@ class MacAgenticUI:
             tool_instructions=self.tool_instructions,
             skill_catalog=self.skill_catalog,
             show_tool_output=self.show_tool_output,
+            show_status=True,
         )
         with self._tabs_lock:
             self.tabs.append(UITab(control=control))
@@ -425,7 +427,9 @@ class MacAgenticUI:
         with self._tabs_lock:
             if not 0 <= index < len(self.tabs):
                 return
-            self.tabs[index].control.interrupt()
+            tab = self.tabs[index]
+            tab.control.interrupt()
+            save_history(self.workspace, tab.control.history.getvalue())
             self.tabs.pop(index)
             if not self.tabs:
                 self.active_index = -1

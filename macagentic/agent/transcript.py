@@ -22,6 +22,21 @@ class Transcript:
         if callback is not None:
             callback()
 
+    def replace_last(self, old: str, new: str) -> bool:
+        with self._lock:
+            value = self._buffer.getvalue()
+            index = value.rfind(old)
+            if index < 0:
+                return False
+            self._buffer = StringIO(
+                value[:index] + new + value[index + len(old) :]
+            )
+            self._buffer.seek(0, 2)
+            callback = self._on_change
+        if callback is not None:
+            callback()
+        return True
+
     def getvalue(self) -> str:
         with self._lock:
             return self._buffer.getvalue()

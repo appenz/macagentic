@@ -11,13 +11,18 @@ from macagentic.ui.testing import UITestDriver
 class FakeControl:
     def __init__(self, _workspace, **kwargs):
         self.transcript = kwargs.get("transcript") or Transcript()
+        self.history = Transcript()
         self.on_usage = kwargs.get("on_usage")
         self.usage = UsageAccumulator()
         self.interrupted = False
 
     def run_turn(self, text: str) -> None:
-        self.transcript.write(f"**You:** {text}\n\n")
-        self.transcript.write("# Agent reply\n\nRendered **Markdown**.\n")
+        content = (
+            f"**You:** {text}\n\n"
+            "# Agent reply\n\nRendered **Markdown**.\n"
+        )
+        self.transcript.write(content)
+        self.history.write(content)
         snapshot = self.usage.add_response(
             {
                 "usage": {
@@ -43,6 +48,13 @@ def test_ui_passively_renders_transcript(monkeypatch) -> None:
     monkeypatch.setattr("macagentic.ui.core.Control", FakeControl)
     from macagentic.ui.core import MacAgenticUI
 
+    saved = []
+    monkeypatch.setattr(
+        "macagentic.ui.core.save_history",
+        lambda workspace, content: saved.append((workspace, content))
+        if content.strip()
+        else None,
+    )
     ui = MacAgenticUI(Path.cwd())
     ui.start(dont_run_app=True)
     driver = UITestDriver(ui)
@@ -105,3 +117,6 @@ def test_ui_passively_renders_transcript(monkeypatch) -> None:
     ui.hotkey_pressed()
     assert ui.window is not None
     ui.close_window()
+    expected_history = ui.active_tab.control.history.getvalue()
+    ui.close_tab(0)
+    assert saved == [(Path.cwd(), expected_history)]

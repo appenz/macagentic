@@ -131,6 +131,7 @@ _BLOCK_KIND = {
     "ordered_list_open": "list",
     "table_open": "heavy",
     "fence": "heavy",
+    "status": "status",
     "code_block": "heavy",
     "blockquote_open": "heavy",
 }
@@ -140,22 +141,32 @@ _GAP_BEFORE = {
     ("start", "heading"): 0.0,
     ("start", "list"): 0.0,
     ("start", "heavy"): 0.0,
+    ("start", "status"): 0.0,
     ("paragraph", "paragraph"): PARAGRAPH_GAP,
     ("paragraph", "heading"): PARAGRAPH_GAP,
     ("paragraph", "list"): BLOCK_GAP,
     ("paragraph", "heavy"): HEAVY_GAP,
+    ("paragraph", "status"): BLOCK_GAP,
     ("heading", "paragraph"): BLOCK_GAP,
     ("heading", "heading"): BLOCK_GAP,
     ("heading", "list"): BLOCK_GAP,
     ("heading", "heavy"): HEAVY_GAP,
+    ("heading", "status"): BLOCK_GAP,
     ("list", "paragraph"): BLOCK_GAP,
     ("list", "heading"): PARAGRAPH_GAP,
     ("list", "list"): BLOCK_GAP,
     ("list", "heavy"): HEAVY_GAP,
+    ("list", "status"): BLOCK_GAP,
     ("heavy", "paragraph"): HEAVY_GAP,
     ("heavy", "heading"): HEAVY_GAP,
     ("heavy", "list"): HEAVY_GAP,
     ("heavy", "heavy"): HEAVY_GAP,
+    ("heavy", "status"): BLOCK_GAP,
+    ("status", "paragraph"): BLOCK_GAP,
+    ("status", "heading"): BLOCK_GAP,
+    ("status", "list"): BLOCK_GAP,
+    ("status", "heavy"): BLOCK_GAP,
+    ("status", "status"): 0.0,
 }
 
 
@@ -244,6 +255,18 @@ class MarkdownRenderer:
 
             if token.type in {"fence", "code_block"}:
                 block = NSMutableAttributedString.alloc().init()
+                if token.type == "fence" and token.info.strip() == "status":
+                    block.appendAttributedString_(
+                        _attributed(
+                            (token.content or "").strip(),
+                            color=color.colorWithAlphaComponent_(0.55),
+                            font=NSFont.systemFontOfSize_(CODE_FONT_SIZE),
+                            style=_paragraph_style(),
+                        )
+                    )
+                    blocks.append(("status", block, None))
+                    i += 1
+                    continue
                 block_id = self._append_collapsible_block(
                     block,
                     (token.content or "").rstrip("\n"),

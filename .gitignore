@@ -8,6 +8,7 @@ wheels/
 *.egg-info
 .pytest_cache/
 debug_screenshot.png
+history.local/
 
 # Virtual environments
 .venv

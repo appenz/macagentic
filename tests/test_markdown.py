@@ -1,6 +1,7 @@
 from Cocoa import (
     NSColor,
     NSFontAttributeName,
+    NSForegroundColorAttributeName,
     NSLineBreakByTruncatingTail,
     NSParagraphStyleAttributeName,
 )
@@ -57,6 +58,25 @@ def test_markdown_renders_blocks_and_tables() -> None:
     assert "print('hello')" in text
     assert "[copy]" in text
     assert len(renderer.block_ranges) == 1
+
+
+def test_markdown_renders_status_as_subdued_plain_text() -> None:
+    rendered = MarkdownRenderer().render(
+        "```status\nChecking calendar\n```\n\n"
+        "```status\nReading event details\n```",
+        NSColor.blackColor(),
+    )
+
+    assert str(rendered.string()) == "Checking calendar\nReading event details"
+    color, _ = rendered.attribute_atIndex_effectiveRange_(
+        NSForegroundColorAttributeName,
+        0,
+        None,
+    )
+    assert color.alphaComponent() == 0.55
+    assert "[copy]" not in str(rendered.string())
+    assert _style_at(rendered, "Checking").paragraphSpacing() == 0
+    assert _style_at(rendered, "Reading").paragraphSpacingBefore() == 0
 
 
 def test_markdown_lists_use_macllm_hanging_indents_and_spacing() -> None:
