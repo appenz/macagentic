@@ -95,7 +95,7 @@ The base prompt lives in `macagentic/agent/prompts/default.md`. With no
 
 Project defaults are loaded from `config/config.toml`. Override any value in
 `~/.config/macagentic/config.toml`; user values win recursively. Supported
-values are `model`, `openai_api_key`, and `custom_prompt`.
+values are `model`, `openai_api_key`, `brave_api_key`, and `custom_prompt`.
 
 Capture a completed UI render for debugging:
 

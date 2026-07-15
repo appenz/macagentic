@@ -21,6 +21,7 @@ def test_user_config_overrides_project_config(
     user_config.write_text(
         'model = "openai/user-model"\n'
         'openai_api_key = "user-key"\n'
+        'brave_api_key = "brave-user-key"\n'
     )
     monkeypatch.setenv("HOME", str(home))
 
@@ -28,4 +29,5 @@ def test_user_config_overrides_project_config(
 
     assert config.model == "openai/user-model"
     assert config.openai_api_key == "user-key"
+    assert config.brave_api_key == "brave-user-key"
     assert config.custom_prompt == "Project instructions"

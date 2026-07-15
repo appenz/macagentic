@@ -38,6 +38,7 @@ def _deep_merge(
 class MacAgenticConfig:
     model: str = "openai/gpt-5-mini"
     openai_api_key: str = ""
+    brave_api_key: str = ""
     custom_prompt: str = ""
 
 
@@ -45,6 +46,7 @@ def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
     return MacAgenticConfig(
         model=str(data.get("model", "openai/gpt-5-mini") or ""),
         openai_api_key=str(data.get("openai_api_key", "") or ""),
+        brave_api_key=str(data.get("brave_api_key", "") or ""),
         custom_prompt=str(data.get("custom_prompt", "") or ""),
     )
 
