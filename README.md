@@ -13,6 +13,8 @@ Agent tools live in `tools/<name>/` with a same-named shell launcher, a
 `main.py` implementation, `PROMPT.md`, and colocated tests. `make install-tools` creates
 safe per-user symlinks in `~/.local/bin`; ensure that directory is on `PATH`.
 Remove this project's links with `make uninstall-tools`.
+Tools may bundle agent skills under `tools/<name>/skills/<skillname>/SKILL.md`;
+they are loaded alongside user skills from `~/.agents/skills/`.
 
 `make run` and `make runui` regenerate `.build/tools.md` from each tool's
 `PROMPT.md` and substitute it into the `{{TOOLS}}` placeholder in the system
@@ -20,6 +22,34 @@ prompt (`# Available Tools` lives in the prompt file). Custom instructions
 fill `{{CUSTOM_INSTRUCTIONS}}`. They do not install tools.
 Validate tool layouts with `make check-tools` and run only tool tests with
 `make test-tools`.
+
+## Google Workspace accounts
+
+The `gwsx` tool wraps the
+[Google Workspace CLI](https://github.com/googleworkspace/cli) with explicit,
+isolated account aliases. Install `gws` first (for example,
+`brew install googleworkspace-cli`), then add each account:
+
+```sh
+gwsx account add private
+gwsx account add work
+gwsx account list
+gwsx account delete work
+```
+
+Account setup uses the interactive `gws auth setup` flow. Each alias has its own
+credentials and token cache under `~/.config/gwsx/accounts/`, so commands can
+target different accounts without switching global state:
+
+```sh
+gwsx private drive files list --params '{"pageSize": 5}'
+gwsx work calendar events list --params '{"calendarId": "primary"}'
+gwsx private auth login --scopes drive,gmail
+```
+
+The account alias is always required. All remaining arguments are passed to
+`gws` unchanged. Deleting an account removes its local profile and credentials;
+it does not revoke the OAuth grant in the Google account.
 
 The harness maintains one conversation and alternates between `You:` and
 `Agent:` turns. The agent can run bash commands when needed, but answers simple

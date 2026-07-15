@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from macagentic.agent import Control
-from macagentic.agent.skills import load_skills
+from macagentic.agent.skills import load_available_skills
 from macagentic.agent.usage import print_usage
 from macagentic.config import MacAgenticConfig, load_config
 
@@ -89,7 +89,7 @@ def main() -> None:
     task = _initial_task(args)
     custom_instructions = _custom_instructions(args, config)
     tool_instructions = _tool_instructions(args)
-    skill_catalog = load_skills()
+    skill_catalog = load_available_skills()
     model_name = args.model or config.model
 
     if args.ui:

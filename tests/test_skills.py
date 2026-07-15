@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from macagentic.agent.skills import load_skills
+from macagentic.agent.skills import load_available_skills, load_skills
 
 
 def _write_skill(
@@ -58,14 +58,10 @@ user-invocable: false
         "model-skill",
     ]
     assert catalog.render_prompt() == (
-        "# Skills\n"
-        "You have access to agent skills that help you fulfill tasks.\n"
-        "Load skills by reading the file "
-        "~/.agents/skills/<skillname>/SKILL.md\n"
-        "Below a list of skills, the format is "
-        "<skill name> - Description.\n\n"
-        "alpha-skill - Do alpha work.\n"
-        "model-skill - Model-only work."
+        f"alpha-skill - Do alpha work. - "
+        f"{(tmp_path / 'alpha-skill' / 'SKILL.md').resolve()}\n"
+        f"model-skill - Model-only work. - "
+        f"{(tmp_path / 'model-skill' / 'SKILL.md').resolve()}"
     )
 
 
@@ -119,9 +115,56 @@ def test_missing_skills_directory_returns_empty_catalog(
 
     assert catalog.skills == ()
     assert catalog.expand_commands("/exit") == "/exit"
-    assert catalog.render_prompt().endswith(
-        "Below a list of skills, the format is <skill name> - Description."
+    assert catalog.render_prompt() == ""
+
+
+def test_loads_user_and_tool_skills(tmp_path: Path) -> None:
+    tools_root = tmp_path / "tools"
+    user_root = tmp_path / "user-skills"
+    tool_skills = tools_root / "calendar" / "skills"
+    tool_skills.mkdir(parents=True)
+    user_root.mkdir()
+    _write_skill(
+        tool_skills,
+        "calendar-agenda",
+        "description: Read the calendar.",
+        "Calendar instructions.",
     )
+    _write_skill(
+        user_root,
+        "personal-notes",
+        "description: Read personal notes.",
+        "Notes instructions.",
+    )
+
+    catalog = load_available_skills(user_root, tools_root)
+
+    assert [skill.name for skill in catalog.skills] == [
+        "calendar-agenda",
+        "personal-notes",
+    ]
+    assert catalog.skills[0].source == (
+        tool_skills / "calendar-agenda" / "SKILL.md"
+    ).resolve()
+    assert str(catalog.skills[0].source) in catalog.render_prompt()
+
+
+def test_rejects_duplicate_user_and_tool_skill_names(tmp_path: Path) -> None:
+    tools_root = tmp_path / "tools"
+    user_root = tmp_path / "user-skills"
+    tool_skills = tools_root / "calendar" / "skills"
+    tool_skills.mkdir(parents=True)
+    user_root.mkdir()
+    for root in (tool_skills, user_root):
+        _write_skill(
+            root,
+            "duplicate",
+            "description: Duplicate skill.",
+            "Instructions.",
+        )
+
+    with pytest.raises(ValueError, match="Duplicate skill 'duplicate'"):
+        load_available_skills(user_root, tools_root)
 
 
 def test_rejects_non_boolean_invocation_flags(tmp_path: Path) -> None:

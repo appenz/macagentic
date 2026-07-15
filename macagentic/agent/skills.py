@@ -5,6 +5,11 @@ from pathlib import Path
 import yaml
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_USER_SKILLS_DIR = Path.home() / ".agents" / "skills"
+DEFAULT_TOOLS_ROOT = PROJECT_ROOT / "tools"
+
+
 @dataclass(frozen=True)
 class Skill:
     name: str
@@ -12,6 +17,7 @@ class Skill:
     body: str
     disable_model_invocation: bool = False
     user_invocable: bool = True
+    source: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -19,25 +25,11 @@ class SkillCatalog:
     skills: tuple[Skill, ...] = ()
 
     def render_prompt(self) -> str:
-        lines = [
-            "# Skills",
-            "You have access to agent skills that help you fulfill tasks.",
-            (
-                "Load skills by reading the file "
-                "~/.agents/skills/<skillname>/SKILL.md"
-            ),
-            (
-                "Below a list of skills, the format is "
-                "<skill name> - Description."
-            ),
-            "",
-        ]
-        lines.extend(
-            f"{skill.name} - {skill.description}"
+        return "\n".join(
+            _render_skill(skill)
             for skill in self.skills
             if not skill.disable_model_invocation
         )
-        return "\n".join(lines).rstrip()
 
     def expand_commands(self, text: str) -> str:
         invocable = {
@@ -63,16 +55,51 @@ EMPTY_SKILL_CATALOG = SkillCatalog()
 
 
 def load_skills(directory: Path | None = None) -> SkillCatalog:
-    skills_dir = directory or Path.home() / ".agents" / "skills"
-    if not skills_dir.is_dir():
-        return EMPTY_SKILL_CATALOG
+    skills_dir = directory or DEFAULT_USER_SKILLS_DIR
+    return _load_skill_directories([skills_dir])
 
-    skills = []
-    for child in sorted(skills_dir.iterdir(), key=lambda path: path.name):
-        skill_file = child / "SKILL.md"
-        if child.is_dir() and skill_file.is_file():
-            skills.append(_read_skill(skill_file, child.name))
-    return SkillCatalog(tuple(skills))
+
+def load_available_skills(
+    user_directory: Path | None = None,
+    tools_root: Path | None = None,
+) -> SkillCatalog:
+    tools_directory = tools_root or DEFAULT_TOOLS_ROOT
+    directories = []
+    if tools_directory.is_dir():
+        directories.extend(
+            skills_dir
+            for tool in sorted(tools_directory.iterdir(), key=lambda path: path.name)
+            if tool.is_dir() and (skills_dir := tool / "skills").is_dir()
+        )
+    directories.append(user_directory or DEFAULT_USER_SKILLS_DIR)
+    return _load_skill_directories(directories)
+
+
+def _load_skill_directories(directories: list[Path]) -> SkillCatalog:
+    skills: dict[str, Skill] = {}
+    for skills_dir in directories:
+        if not skills_dir.is_dir():
+            continue
+        for child in sorted(skills_dir.iterdir(), key=lambda path: path.name):
+            skill_file = child / "SKILL.md"
+            if not child.is_dir() or not skill_file.is_file():
+                continue
+            skill = _read_skill(skill_file, child.name)
+            if existing := skills.get(skill.name):
+                raise ValueError(
+                    f"Duplicate skill '{skill.name}': "
+                    f"{existing.source} and {skill.source}"
+                )
+            skills[skill.name] = skill
+
+    if not skills:
+        return EMPTY_SKILL_CATALOG
+    return SkillCatalog(tuple(skills[name] for name in sorted(skills)))
+
+
+def _render_skill(skill: Skill) -> str:
+    source = f" - {skill.source}" if skill.source else ""
+    return f"{skill.name} - {skill.description}{source}"
 
 
 def _read_skill(path: Path, name: str) -> Skill:
@@ -103,6 +130,7 @@ def _read_skill(path: Path, name: str) -> Skill:
         name=name,
         description=description.strip(),
         body=body,
+        source=path.resolve(),
         disable_model_invocation=_read_bool(
             metadata,
             "disable-model-invocation",

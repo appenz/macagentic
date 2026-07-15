@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+TOOL_DIR="$(dirname "$(realpath "$0")")"
+exec uv run --script "$TOOL_DIR/main.py" "$@"
