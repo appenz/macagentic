@@ -13,6 +13,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 
@@ -20,10 +21,10 @@ BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 DEFAULT_COUNT = 5
 MIN_COUNT = 1
 MAX_COUNT = 20
-COMMAND_HELP = """search - Web search via Brave Search
+COMMAND_HELP = """websearch - Web search via Brave Search
 Usage:
-  search "<query>"
-  search "<query>" --count 10"""
+  websearch "<query>"
+  websearch "<query>" --count 10"""
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,8 +42,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _brave_api_key_from_config() -> str:
+    root = _project_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from macagentic.config import load_config
+
+    return load_config(root).brave_api_key.strip()
+
+
 def _api_key() -> str:
-    return os.environ.get("BRAVE_API_KEY", "").strip()
+    env_key = os.environ.get("BRAVE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    return _brave_api_key_from_config()
 
 
 def _search(query: str, count: int, api_key: str) -> list[dict[str, str]]:
@@ -148,8 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     api_key = _api_key()
     if not api_key:
         print(
-            "error: BRAVE_API_KEY is not set. "
-            "Add brave_api_key to ~/.config/macagentic/config.toml",
+            "error: brave_api_key is not set. "
+            "Add it to ~/.config/macagentic/config.toml "
+            "or export BRAVE_API_KEY.",
             file=sys.stderr,
         )
         return 1
