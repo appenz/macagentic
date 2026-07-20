@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+import queue
 import signal
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import objc
 from Cocoa import (
-    NSAlert,
-    NSAlertFirstButtonReturn,
     NSApp,
     NSApplication,
     NSApplicationActivationPolicyRegular,
-    NSAttributedString,
     NSBackgroundColorAttributeName,
     NSBackingStoreBuffered,
     NSBorderlessWindowMask,
@@ -27,7 +24,6 @@ from Cocoa import (
     NSForegroundColorAttributeName,
     NSImage,
     NSImageView,
-    NSMakeRect,
     NSMenu,
     NSMenuItem,
     NSNoBorder,
@@ -43,6 +39,7 @@ from Cocoa import (
     NSTextView,
     NSThread,
     NSView,
+    NSWindow,
     NSWorkspace,
     NSMutableAttributedString,
     NSMutableParagraphStyle,
@@ -51,11 +48,22 @@ from Foundation import NSTimer, NSURL
 from quickmachotkey import mask, quickHotKey
 from quickmachotkey.constants import kVK_Space, optionKey
 
-from macagentic.agent import Control, Transcript
-from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
-from macagentic.agent.usage import UsageSnapshot, display_model_name
+from macagentic.agent import Agent
+from macagentic.app import app
 from macagentic.history import save_history
+from macagentic.ui.helpers import request_fast_text
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
+from macagentic.ui.projection import (
+    display_model_name,
+    render_conversation,
+    render_history,
+)
+from macagentic.ui.updates import (
+    AgentThreadCompleted,
+    SetTabTitle,
+    SetToolCallDescription,
+    UIUpdate,
+)
 
 
 _hotkey_ui = None
@@ -162,7 +170,7 @@ class InputDelegate(NSObject):
                     self.text_view.insertText_("\n")
                     return True
                 if flags & NSCommandKeyMask:
-                    self.ui.interrupt_active(submit_text=text)
+                    self.ui.interrupt_active(replacement=text)
                 else:
                     self.ui.submit(text)
                 return True
@@ -236,14 +244,6 @@ class ConversationDelegate(NSObject):
         except Exception:
             return False
 
-
-@dataclass
-class InteractionRequest:
-    prompt: str
-    event: threading.Event = field(default_factory=threading.Event)
-    answer: object = None
-
-
 class MainThreadBridge(NSObject):
     ui = None
 
@@ -252,35 +252,17 @@ class MainThreadBridge(NSObject):
 
     def repaint_(self, _value):
         if self.ui is not None:
-            self.ui.update_window()
-
-    def permission_(self, request):
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("Permission required")
-        alert.setInformativeText_(request.prompt)
-        alert.addButtonWithTitle_("Allow")
-        alert.addButtonWithTitle_("Deny")
-        request.answer = alert.runModal() == NSAlertFirstButtonReturn
-        request.event.set()
-
-    def clarification_(self, request):
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("Agent needs clarification")
-        alert.setInformativeText_(request.prompt)
-        field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 360, 24))
-        alert.setAccessoryView_(field)
-        alert.addButtonWithTitle_("Submit")
-        alert.addButtonWithTitle_("Cancel")
-        if alert.runModal() == NSAlertFirstButtonReturn:
-            request.answer = str(field.stringValue())
-        request.event.set()
+            self.ui._main_thread_update()
 
     def captureAndQuit_(self, path):
         from macagentic.ui.screenshot import capture_window_by_title
 
-        self.ui.update_window()
+        self.ui._render_window()
         capture_window_by_title("macAgentic", str(path))
         NSApp().terminate_(None)
+
+    def captureFromTimer_(self, timer):
+        self.captureAndQuit_(timer.userInfo())
 
 
 class AppDelegate(NSObject):
@@ -292,17 +274,25 @@ class AppDelegate(NSObject):
         _has_visible_windows,
     ):
         if self.ui is not None and self.ui.window is None:
-            self.ui.update_window()
+            self.ui.hotkey_pressed()
         return True
 
 
 @dataclass
 class UITab:
-    control: Control
+    # Identity and conversation
+    id: int
+    agent: Agent
+
+    # Display state
     title: str = "New Agent"
-    draft: str = ""
+    input_text: str = ""
+    tool_call_descriptions: dict[str, str] = field(default_factory=dict)
+    log_render_index: int = 0
+
+    # Execution
     thread: threading.Thread | None = None
-    pending: list[str] = field(default_factory=list)
+    requests: queue.Queue[str] = field(default_factory=queue.Queue)
 
     def running(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
@@ -310,6 +300,17 @@ class UITab:
 
 class MacAgenticUI:
     """A passive Cocoa renderer over each tab's in-memory transcript."""
+
+    tabs: list[UITab]
+    active_index: int
+    next_tab_id: int
+    focused_block: int
+    window: NSWindow | None
+    input_field: NSTextView | None
+    text_view: NSTextView | None
+    renderer: MarkdownRenderer
+    bridge: MainThreadBridge
+    update_queue: queue.Queue[UIUpdate]
 
     padding = 4
     top_bar_height = 48
@@ -327,35 +328,17 @@ class MacAgenticUI:
     textbox_x_fudge = 3
     textbox_y_fudge = 3
 
-    def __init__(
-        self,
-        workspace: Path,
-        *,
-        model_name: str | None = None,
-        initial_task: str | None = None,
-        screenshot_path: Path | None = None,
-        custom_instructions: str | None = None,
-        tool_instructions: str | None = None,
-        skill_catalog: SkillCatalog | None = None,
-        show_tool_output: bool = False,
-    ) -> None:
-        self.workspace = workspace
-        self.model_name = model_name
-        self.initial_task = initial_task
-        self.screenshot_path = screenshot_path
-        self.custom_instructions = custom_instructions
-        self.tool_instructions = tool_instructions
-        self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
-        self.show_tool_output = show_tool_output
-        self.app = None
+    def __init__(self, agent: Agent) -> None:
         self.window = None
         self.input_field = None
         self.text_view = None
         self.renderer = MarkdownRenderer()
-        self.tabs: list[UITab] = []
-        self.active_index = -1
+        agent.ui = self
+        self.tabs = [UITab(id=1, agent=agent)]
+        self.active_index = 0
+        self.next_tab_id = 2
         self.focused_block = -1
-        self._tabs_lock = threading.RLock()
+        self.update_queue: queue.Queue[UIUpdate] = queue.Queue()
 
         self.bridge = MainThreadBridge.alloc().init()
         self.bridge.ui = self
@@ -374,18 +357,17 @@ class MacAgenticUI:
         global _hotkey_ui
 
         _hotkey_ui = self
-        self.app = NSApplication.sharedApplication()
-        self.app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        cocoa_app = NSApplication.sharedApplication()
+        cocoa_app.setActivationPolicy_(NSApplicationActivationPolicyRegular)
         self.app_delegate = AppDelegate.alloc().init()
         self.app_delegate.ui = self
-        self.app.setDelegate_(self.app_delegate)
+        cocoa_app.setDelegate_(self.app_delegate)
         self._install_menu()
         if (
             self.dock_icon.size().width > 0
             and self.dock_icon.size().height > 0
         ):
-            self.app.setApplicationIconImage_(self.dock_icon)
-        self.new_tab()
+            cocoa_app.setApplicationIconImage_(self.dock_icon)
         signal.signal(signal.SIGINT, self._handle_console_interrupt)
         self._signal_timer = (
             NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
@@ -396,152 +378,220 @@ class MacAgenticUI:
                 True,
             )
         )
-        self.update_window()
-        if self.initial_task:
-            self.submit(self.initial_task)
         if not dont_run_app:
-            self.app.run()
+            cocoa_app.run()
 
     def new_tab(self) -> None:
-        transcript = Transcript(on_change=self.request_update)
-        control = Control(
-            self.workspace,
-            model_name=self.model_name,
-            transcript=transcript,
-            ask_permission=self.ask_permission,
-            ask_clarification=self.ask_clarification,
-            on_usage=self._usage_changed,
-            custom_instructions=self.custom_instructions,
-            tool_instructions=self.tool_instructions,
-            skill_catalog=self.skill_catalog,
-            show_tool_output=self.show_tool_output,
-            show_status=True,
-        )
-        with self._tabs_lock:
-            self.tabs.append(UITab(control=control))
-            self.active_index = len(self.tabs) - 1
+        self._save_input()
+        agent = app.create_agent()
+        agent.ui = self
+        self.tabs.append(UITab(id=self.next_tab_id, agent=agent))
+        self.next_tab_id += 1
+        self.active_index = len(self.tabs) - 1
         if self.window is not None:
-            self.update_window()
+            self._render_window()
 
     def close_tab(self, index: int) -> None:
-        with self._tabs_lock:
-            if not 0 <= index < len(self.tabs):
-                return
-            tab = self.tabs[index]
-            tab.control.interrupt()
-            save_history(self.workspace, tab.control.history.getvalue())
-            self.tabs.pop(index)
-            if not self.tabs:
-                self.active_index = -1
-                self.new_tab()
-                return
+        if not 0 <= index < len(self.tabs):
+            return
+        tab = self.tabs[index]
+        tab.agent.interrupt()
+        save_history(
+            app.workspace,
+            render_history(tab.agent.conversation_log.snapshot()),
+        )
+        self.tabs.pop(index)
+        if not self.tabs:
+            agent = app.create_agent()
+            agent.ui = self
+            self.tabs.append(UITab(id=self.next_tab_id, agent=agent))
+            self.next_tab_id += 1
+            self.active_index = 0
+        else:
             self.active_index = min(self.active_index, len(self.tabs) - 1)
-        self.update_window()
+        self._render_window()
 
     def switch_tab(self, index: int) -> None:
         if not 0 <= index < len(self.tabs):
             return
-        self._save_draft()
+        self._save_input()
         self.active_index = index
         self.focused_block = -1
-        self.update_window()
+        self._render_window()
 
-    def submit(self, text: str) -> None:
-        text = text.strip()
-        if not text:
+    def submit(self, request: str) -> None:
+        request = request.strip()
+        if not request:
             return
         tab = self.active_tab
         self._clear_input()
         if tab.title == "New Agent":
-            tab.title = " ".join(text.split())[:28]
-
-        with self._tabs_lock:
-            if tab.running():
-                tab.pending.append(text)
-                return
-
-            def run() -> None:
-                next_text = text
-                try:
-                    while next_text:
-                        tab.control.run_turn(next_text)
-                        with self._tabs_lock:
-                            next_text = (
-                                tab.pending.pop(0) if tab.pending else ""
-                            )
-                finally:
-                    tab.thread = None
-                    self.request_update()
-                    if self.screenshot_path is not None:
-                        path = self.screenshot_path
-                        self.screenshot_path = None
-                        time.sleep(1.0)
-                        self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
-                            "captureAndQuit:", path, False
-                        )
-
-            tab.thread = threading.Thread(
-                target=run,
-                name=f"macagentic-tab-{self.active_index}",
-                daemon=True,
+            tab.title = " ".join(request.split())[:28]
+            tab_id = tab.id
+            request_fast_text(
+                system_prompt=(
+                    "Write a concise 2-4 word title for this coding task. "
+                    "Return only the title, without quotes or punctuation."
+                ),
+                user_prompt=request,
+                on_result=lambda result: self.post_update(
+                    SetTabTitle(tab_id, _clean_title(result))
+                ),
             )
-            tab.thread.start()
-        self.request_update()
 
-    def _usage_changed(self, _usage: UsageSnapshot) -> None:
-        self.request_update()
+        tab.requests.put(request)
+        if not tab.running():
+            self._start_tab_thread(tab)
+        self.update()
 
-    def interrupt_active(self, submit_text: str = "") -> None:
+    def interrupt_active(self, replacement: str = "") -> None:
         tab = self.active_tab
-        tab.control.interrupt()
-        if submit_text:
-            with self._tabs_lock:
-                tab.pending.insert(0, submit_text)
+        tab.agent.interrupt()
+        if replacement:
+            tab.requests.put(replacement)
         self._clear_input()
-        self.request_update()
+        self.update()
 
     def _handle_console_interrupt(self, _signum, _frame) -> None:
         if self.tabs and self.active_tab.running():
-            self.active_tab.control.interrupt()
+            self.active_tab.agent.interrupt()
             print("\nInterrupted.")
-            self.request_update()
+            self.update()
             return
         NSApp().terminate_(None)
 
-    def request_update(self) -> None:
-        if self.window is None:
-            return
+    def update(self) -> None:
         if NSThread.isMainThread():
-            self.update_window()
+            self._main_thread_update()
         else:
             self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
                 "repaint:", None, False
             )
 
-    def ask_permission(self, prompt: str) -> bool:
-        request = InteractionRequest(prompt)
-        self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "permission:", request, False
-        )
-        request.event.wait()
-        return bool(request.answer)
+    def post_update(self, event: UIUpdate) -> None:
+        self.update_queue.put(event)
+        self.update()
 
-    def ask_clarification(self, prompt: str) -> str | None:
-        request = InteractionRequest(prompt)
-        self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "clarification:", request, False
-        )
-        request.event.wait()
-        return request.answer if isinstance(request.answer, str) else None
+    def _start_tab_thread(self, tab: UITab) -> None:
+        request = tab.requests.get_nowait()
+        tab_id = tab.id
+        agent = tab.agent
+        updates = self.update_queue
+        bridge = self.bridge
 
-    def update_window(self) -> None:
+        def run() -> None:
+            try:
+                agent.run_turn(request)
+            finally:
+                updates.put(
+                    AgentThreadCompleted(tab_id, threading.get_ident())
+                )
+                bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "repaint:", None, False
+                )
+
+        tab.thread = threading.Thread(
+            target=run,
+            name=f"macagentic-tab-{tab.id}",
+            daemon=True,
+        )
+        tab.thread.start()
+
+    def _main_thread_update(self) -> None:
+        while True:
+            try:
+                event = self.update_queue.get_nowait()
+            except queue.Empty:
+                break
+            tab = self._tab_with_id(event.tab_id)
+            if tab is None:
+                continue
+            if isinstance(event, SetTabTitle):
+                tab.title = event.title
+            elif isinstance(event, SetToolCallDescription):
+                tab.tool_call_descriptions[event.tool_call_id] = event.text
+            elif (
+                isinstance(event, AgentThreadCompleted)
+                and tab.thread is not None
+                and tab.thread.ident == event.thread_id
+            ):
+                tab.thread = None
+                if not tab.requests.empty():
+                    self._start_tab_thread(tab)
+                elif app.screenshot_path is not None:
+                    path = app.screenshot_path
+                    app.screenshot_path = None
+                    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                        1.0,
+                        self.bridge,
+                        "captureFromTimer:",
+                        str(path),
+                        False,
+                    )
+
+        for tab in self.tabs:
+            self._start_display_work(tab)
+        if self.window is not None:
+            self._render_window()
+
+    def _start_display_work(self, tab: UITab) -> None:
+        events = tab.agent.conversation_log.snapshot()
+        new_events = events[tab.log_render_index :]
+        tab.log_render_index = len(events)
+        user_request = next(
+            (
+                str(event.payload.get("content", ""))
+                for event in reversed(events)
+                if event.kind == "user_input"
+            ),
+            "",
+        )
+        for event in new_events:
+            if event.kind != "message":
+                continue
+            for action in event.payload.get("extra", {}).get("actions", []):
+                call_id = str(action.get("tool_call_id", ""))
+                if not call_id or call_id in tab.tool_call_descriptions:
+                    continue
+                tab.tool_call_descriptions[call_id] = "Running command"
+                command = str(action.get("command", ""))
+                tab_id = tab.id
+                request_fast_text(
+                    system_prompt=(
+                        "Write a concise, user-facing progress update describing "
+                        "what the command is accomplishing, not how it works. "
+                        "Include the source and specific subject when available. "
+                        "Use a 4-9 word gerund phrase. Return only the update with "
+                        "no punctuation."
+                    ),
+                    user_prompt=(
+                        f"User request:\n{user_request}\n\n"
+                        f"Command:\n{command}"
+                    ),
+                    on_result=lambda result, tid=tab_id, cid=call_id: self.post_update(
+                        SetToolCallDescription(
+                            tid,
+                            cid,
+                            _clean_description(result),
+                        )
+                    ),
+                )
+
+    def _tab_with_id(self, tab_id: int) -> UITab | None:
+        return next((tab for tab in self.tabs if tab.id == tab_id), None)
+
+    def _render_window(self) -> None:
         if not self.tabs:
             return
         draft = self._current_input()
         if self.window is not None:
-            self.active_tab.draft = draft
+            self.active_tab.input_text = draft
 
-        transcript = self.active_tab.control.transcript.getvalue()
+        transcript = render_conversation(
+            self.active_tab.agent.conversation_log.snapshot(),
+            tool_call_descriptions=self.active_tab.tool_call_descriptions,
+            show_tool_output=app.show_tool_output,
+        )
         rendered = self.renderer.render(transcript, NSColor.darkGrayColor())
         content_height = self._measure(rendered)
         screen = NSScreen.mainScreen().frame().size
@@ -643,12 +693,12 @@ class MacAgenticUI:
             self._render_transcript(root, main_y, main_height, rendered)
         else:
             self.text_view = None
-        self._render_input(root, input_y, self.active_tab.draft)
+        self._render_input(root, input_y, self.active_tab.input_text)
 
         self.window.display()
         self.window.orderFrontRegardless()
         self.window.makeKeyWindow()
-        self.app.activateIgnoringOtherApps_(True)
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.window.makeFirstResponder_(self.input_field)
 
     def _render_top_bar(self, root, y: float) -> None:
@@ -671,10 +721,8 @@ class MacAgenticUI:
         image.setImageScaling_(3)
         bar.addSubview_(image)
 
-        snapshot = self.active_tab.control.usage.snapshot()
-        model = display_model_name(
-            self.model_name or "openai/gpt-5-mini"
-        )
+        snapshot = self.active_tab.agent.usage.snapshot()
+        model = display_model_name(self.active_tab.agent.model_name)
         line1 = f"{model} / ${snapshot.cost:.2f}"
         line2 = (
             f"Input: {snapshot.input_tokens:,} / "
@@ -945,7 +993,7 @@ class MacAgenticUI:
 
     def toggle_block(self, block_id: str) -> None:
         self.renderer.toggle_block(block_id)
-        self.update_window()
+        self._render_window()
 
     def copy_block(self, block_id: str) -> None:
         content = self.renderer.block_content(block_id)
@@ -985,32 +1033,32 @@ class MacAgenticUI:
 
     def exit_block_focus(self) -> None:
         self.focused_block = -1
-        self.update_window()
+        self._render_window()
 
     def close_window(self) -> None:
-        self._save_draft()
+        self._save_input()
         if self.window is not None:
             self.window.orderOut_(None)
             self.window = None
-        self.app.hide_(None)
+        NSApplication.sharedApplication().hide_(None)
 
     def hotkey_pressed(self) -> None:
         if self.window is None:
-            self.update_window()
+            self._render_window()
         else:
             self.close_window()
 
-    def _save_draft(self) -> None:
+    def _save_input(self) -> None:
         if self.input_field is not None and self.tabs:
-            self.active_tab.draft = str(self.input_field.string())
+            self.active_tab.input_text = str(self.input_field.string())
 
     def _current_input(self) -> str:
         if self.input_field is None:
-            return self.active_tab.draft if self.tabs else ""
+            return self.active_tab.input_text if self.tabs else ""
         return str(self.input_field.string())
 
     def _clear_input(self) -> None:
-        self.active_tab.draft = ""
+        self.active_tab.input_text = ""
         if self.input_field is not None:
             self.input_field.setString_("")
 
@@ -1056,4 +1104,14 @@ class MacAgenticUI:
             )
         edit_item.setSubmenu_(edit_menu)
         menu.addItem_(edit_item)
-        self.app.setMainMenu_(menu)
+        NSApplication.sharedApplication().setMainMenu_(menu)
+
+
+def _clean_title(value: str) -> str:
+    title = " ".join(value.splitlines()[0].split()).strip("\"'` .:;-")
+    return title[:28] or "New Agent"
+
+
+def _clean_description(value: str) -> str:
+    description = " ".join(value.splitlines()[0].split()).strip("\"'` .:;-")
+    return description[:80] or "Running command"

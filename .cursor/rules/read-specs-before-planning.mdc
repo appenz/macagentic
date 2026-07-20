@@ -1,0 +1,14 @@
+---
+description: Read the project overview and relevant specs before planning
+alwaysApply: true
+---
+
+# Read Specs Before Planning
+
+Before creating or presenting an implementation plan:
+
+1. Read `specs/overview.md`.
+2. Follow its instructions to read any other specs relevant to the task.
+
+Use these specs as constraints when evaluating architecture and implementation
+choices. Do not finalize a plan that conflicts with them.

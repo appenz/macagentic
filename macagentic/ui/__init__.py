@@ -1,31 +1,18 @@
-from pathlib import Path
+from macagentic.app import app
+from macagentic.ui.cli import CommandLineUI
 
-from macagentic.agent.skills import SkillCatalog
 
+def run_ui(*, initial_task: str | None = None) -> None:
+    from Cocoa import NSApplication
 
-def run_ui(
-    workspace: Path,
-    *,
-    model_name: str | None = None,
-    initial_task: str | None = None,
-    screenshot_path: Path | None = None,
-    custom_instructions: str | None = None,
-    tool_instructions: str | None = None,
-    skill_catalog: SkillCatalog | None = None,
-    show_tool_output: bool = False,
-) -> None:
     from macagentic.ui.core import MacAgenticUI
 
-    MacAgenticUI(
-        workspace,
-        model_name=model_name,
-        initial_task=initial_task,
-        screenshot_path=screenshot_path,
-        custom_instructions=custom_instructions,
-        tool_instructions=tool_instructions,
-        skill_catalog=skill_catalog,
-        show_tool_output=show_tool_output,
-    ).start()
+    ui = MacAgenticUI(app.create_agent())
+    ui.start(dont_run_app=True)
+    if app.screenshot_path is not None:
+        ui.hotkey_pressed()
+    if initial_task:
+        ui.submit(initial_task)
+    NSApplication.sharedApplication().run()
 
-
-__all__ = ["run_ui"]
+__all__ = ["CommandLineUI", "run_ui"]

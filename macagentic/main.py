@@ -4,9 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from macagentic.agent import Control
 from macagentic.agent.skills import load_available_skills
-from macagentic.agent.usage import print_usage
+from macagentic.app import app
 from macagentic.config import MacAgenticConfig, load_config
 
 
@@ -93,6 +92,15 @@ def main() -> None:
     tool_instructions = _tool_instructions(args)
     skill_catalog = load_available_skills()
     model_name = args.model or config.model
+    app.configure(
+        workspace=Path.cwd(),
+        model_name=model_name,
+        custom_instructions=custom_instructions,
+        tool_instructions=tool_instructions,
+        skill_catalog=skill_catalog,
+        show_tool_output=args.tooloutput,
+        screenshot_path=args.screenshot,
+    )
 
     if args.ui:
         from macagentic.ui import run_ui
@@ -101,37 +109,15 @@ def main() -> None:
             raise SystemExit(
                 "--screenshot requires an initial task or --task-file."
             )
-        run_ui(
-            Path.cwd(),
-            model_name=model_name,
-            initial_task=task,
-            screenshot_path=args.screenshot,
-            custom_instructions=custom_instructions,
-            tool_instructions=tool_instructions,
-            skill_catalog=skill_catalog,
-            show_tool_output=args.tooloutput,
-        )
+        run_ui(initial_task=task)
         return
 
     if args.screenshot:
         raise SystemExit("--screenshot requires --ui.")
 
-    if task is None:
-        try:
-            task = input("Task: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-    if not task:
-        raise SystemExit("A task or non-empty spec is required.")
-    Control(
-        Path.cwd(),
-        model_name=model_name,
-        on_output=lambda content: print(f"\nAgent: {content}"),
-        on_tool_output=lambda content: print(f"\n{content}", end=""),
-        on_turn_complete=print_usage,
-        show_tool_output=args.tooloutput,
-        custom_instructions=custom_instructions,
-        tool_instructions=tool_instructions,
-        skill_catalog=skill_catalog,
-    ).start(task)
+    from macagentic.ui.cli import CommandLineUI, run_batch
+
+    if task is not None:
+        run_batch(task)
+        return
+    CommandLineUI().start()

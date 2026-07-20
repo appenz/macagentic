@@ -1,20 +1,8 @@
-from io import StringIO
-
-from macagentic.agent.usage import (
-    UsageAccumulator,
-    UsageSnapshot,
-    format_usage,
-    print_usage,
-)
+from macagentic.agent import UsageSnapshot, UsageTracker
 
 
-class TTYBuffer(StringIO):
-    def isatty(self) -> bool:
-        return True
-
-
-def test_usage_accumulates_all_response_counters_and_cost() -> None:
-    usage = UsageAccumulator()
+def test_usage_tracker_accumulates_response_counters_and_cost() -> None:
+    usage = UsageTracker()
 
     usage.add_response(
         {
@@ -47,36 +35,3 @@ def test_usage_accumulates_all_response_counters_and_cost() -> None:
         output_tokens=150,
         cost=0.65,
     )
-
-
-def test_usage_plain_text_format_is_exact() -> None:
-    snapshot = UsageSnapshot(
-        input_tokens=12345,
-        cached_input_tokens=8192,
-        cache_write_tokens=4096,
-        output_tokens=1024,
-        cost=0.65,
-    )
-
-    assert format_usage(snapshot) == (
-        "Usage  Input: 12,345  Cached: 8,192  Writes: 4,096  "
-        "Output: 1,024  Cost: $0.65"
-    )
-
-
-def test_usage_print_uses_tty_color_and_honors_no_color(
-    monkeypatch,
-) -> None:
-    snapshot = UsageSnapshot(input_tokens=1, cost=0.01)
-    stream = TTYBuffer()
-    monkeypatch.delenv("NO_COLOR", raising=False)
-
-    print_usage(snapshot, stream=stream)
-
-    assert "\033[36m1\033[0m" in stream.getvalue()
-
-    stream = TTYBuffer()
-    monkeypatch.setenv("NO_COLOR", "1")
-    print_usage(snapshot, stream=stream)
-
-    assert "\033[" not in stream.getvalue()

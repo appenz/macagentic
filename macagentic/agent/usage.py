@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import threading
 from dataclasses import dataclass
-from typing import TextIO
 
 
 @dataclass(frozen=True)
@@ -15,7 +13,7 @@ class UsageSnapshot:
     cost: float = 0.0
 
 
-class UsageAccumulator:
+class UsageTracker:
     """Thread-safe cumulative model usage for one conversation."""
 
     def __init__(self) -> None:
@@ -64,56 +62,6 @@ class UsageAccumulator:
     def snapshot(self) -> UsageSnapshot:
         with self._lock:
             return self._totals
-
-
-def display_model_name(model_name: str) -> str:
-    for prefix in ("openai/responses/", "openai/"):
-        if model_name.startswith(prefix):
-            return model_name.removeprefix(prefix)
-    return model_name
-
-
-def format_usage(snapshot: UsageSnapshot, *, color: bool = False) -> str:
-    fields = (
-        ("Input", f"{snapshot.input_tokens:,}"),
-        ("Cached", f"{snapshot.cached_input_tokens:,}"),
-        ("Writes", f"{snapshot.cache_write_tokens:,}"),
-        ("Output", f"{snapshot.output_tokens:,}"),
-    )
-    if not color:
-        token_text = "  ".join(
-            f"{label}: {value}" for label, value in fields
-        )
-        return f"Usage  {token_text}  Cost: ${snapshot.cost:.2f}"
-
-    dim = "\033[2m"
-    cyan = "\033[36m"
-    green = "\033[32m"
-    reset = "\033[0m"
-    token_text = "  ".join(
-        f"{dim}{label}:{reset} {cyan}{value}{reset}"
-        for label, value in fields
-    )
-    return (
-        f"{dim}Usage{reset}  {token_text}  "
-        f"{dim}Cost:{reset} {green}${snapshot.cost:.2f}{reset}"
-    )
-
-
-def print_usage(
-    snapshot: UsageSnapshot,
-    *,
-    stream: TextIO | None = None,
-) -> None:
-    if stream is None:
-        import sys
-
-        stream = sys.stdout
-    color = bool(
-        getattr(stream, "isatty", lambda: False)()
-        and "NO_COLOR" not in os.environ
-    )
-    print(format_usage(snapshot, color=color), file=stream, flush=True)
 
 
 def _integer(value: object) -> int:

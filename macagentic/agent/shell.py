@@ -7,8 +7,8 @@ from typing import Any
 from minisweagent.environments.local import LocalEnvironment
 
 
-class InterruptibleLocalEnvironment(LocalEnvironment):
-    """Local environment that cleans up commands interrupted by SIGINT."""
+class ShellEnvironment(LocalEnvironment):
+    """Local shell environment with cooperative process interruption."""
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -59,7 +59,6 @@ class InterruptibleLocalEnvironment(LocalEnvironment):
             processes = tuple(self._processes)
         for process in processes:
             _terminate(process)
-
 
     def _run(
         self,
