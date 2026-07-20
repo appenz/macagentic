@@ -51,6 +51,33 @@ def test_projection_renders_display_state_and_optional_tool_output() -> None:
     assert '"tool_call_id": "call-1"' in render_history(events)
 
 
+def test_projection_hides_system_and_user_message_copies() -> None:
+    events = (
+        ConversationEvent(
+            "message",
+            {
+                "role": "system",
+                "content": "Available Skills\n- demo skill",
+            },
+        ),
+        ConversationEvent("user_input", {"content": "List files"}),
+        ConversationEvent(
+            "message",
+            {"role": "user", "content": "List files"},
+        ),
+        ConversationEvent(
+            "message",
+            {"role": "assistant", "content": "Done."},
+        ),
+    )
+
+    rendered = render_conversation(events)
+    assert "Available Skills" not in rendered
+    assert rendered.count("List files") == 1
+    assert "**You:** List files" in rendered
+    assert "Done." in rendered
+
+
 def test_fast_llm_request_is_non_blocking(monkeypatch) -> None:
     release = threading.Event()
     completed = threading.Event()

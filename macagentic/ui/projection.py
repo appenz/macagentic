@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable, Mapping
 
 from macagentic.agent import ConversationEvent, UsageSnapshot
-from macagentic.agent.model import assistant_text
+from macagentic.ui.helpers.assistant_text import assistant_text
 
 
 def render_conversation(

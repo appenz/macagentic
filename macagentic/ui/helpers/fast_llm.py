@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 import litellm
 
-from macagentic.agent.model import assistant_text
+from macagentic.ui.helpers.assistant_text import assistant_text
 
 FAST_MODEL = "openai/gpt-5.4-nano"
 
