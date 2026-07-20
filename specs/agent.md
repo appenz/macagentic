@@ -60,8 +60,8 @@ class Agent:
 
 ## Dependencies
 
-mini-SWE-agent provides the model and environment foundations; macAgentic 
-owns its smaller agent loop rather than using `DefaultAgent`. Model calls 
+mini-SWE-agent provides the model and environment foundations; macAgentic
+owns its smaller agent loop rather than using `DefaultAgent`. Model calls
 use LiteLLM's native Responses API.
 
 ## Agent Loop
