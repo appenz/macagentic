@@ -5,6 +5,7 @@ from macagentic.agent import ConversationEvent, ConversationLog
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG
 from macagentic.app import MacAgenticApp
 from macagentic.ui.cli import CommandLineUI
+from macagentic.ui.core import TOOL_UPDATE_MAX_LENGTH, _clean_description
 from macagentic.ui.helpers.fast_llm import request_fast_text
 from macagentic.ui.projection import render_conversation, render_history
 
@@ -137,3 +138,11 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
     assert kwargs["model_name"] == "test-model"
     assert kwargs["custom_instructions"] == "custom"
     assert kwargs["tool_instructions"] == "tools"
+
+
+def test_tool_update_description_is_truncated_to_80_characters() -> None:
+    assert TOOL_UPDATE_MAX_LENGTH == 80
+    assert len(_clean_description("a" * 100)) == 80
+    assert _clean_description("Searching notes files for Guido") == (
+        "Searching notes files for Guido"
+    )

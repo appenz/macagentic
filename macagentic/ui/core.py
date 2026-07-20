@@ -1112,6 +1112,9 @@ def _clean_title(value: str) -> str:
     return title[:28] or "New Agent"
 
 
+TOOL_UPDATE_MAX_LENGTH = 80
+
+
 def _clean_description(value: str) -> str:
     description = " ".join(value.splitlines()[0].split()).strip("\"'` .:;-")
-    return description[:80] or "Running command"
+    return description[:TOOL_UPDATE_MAX_LENGTH] or "Running command"
