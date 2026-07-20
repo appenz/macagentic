@@ -83,9 +83,9 @@ class UITab:
     def running(self) -> bool: ...
 ```
 
-Tab IDs increase monotonically and are never reused. Agent workers retain the
-tab ID, Agent, and request queue; display workers retain only IDs and immutable
-event data. Workers never retain the `UITab` object.
+Each tab uses its Agent's process-local ID. Agent workers retain the tab ID,
+Agent, and request queue; display workers retain only IDs and immutable event
+data. Workers never retain the `UITab` object.
 
 ## UI Updates
 
@@ -129,7 +129,6 @@ class MacAgenticUI:
 
     # Tab state
     tabs: list[UITab]
-    next_tab_id: int
     active_index: int
     focused_block: int
 
@@ -185,3 +184,17 @@ Description helpers post
 `SetToolCallDescription(tab_id, tool_call_id, text)`. Results are stored by
 tool call ID and rendered beside the corresponding call, regardless of the
 order in which descriptions finish.
+
+## Files
+
+- `macagentic/ui/__init__.py`: Cocoa UI entry point (`run_ui`).
+- `macagentic/ui/cli.py`: `CommandLineUI` and batch CLI runner.
+- `macagentic/ui/core.py`: `MacAgenticUI`, Cocoa window, tabs, and rendering orchestration.
+- `macagentic/ui/markdown.py`: Native Cocoa Markdown renderer.
+- `macagentic/ui/projection.py`: Terminal conversation-log projection and usage formatting.
+- `macagentic/ui/updates.py`: Immutable UI update events.
+- `macagentic/ui/helpers/fast_llm.py`: Asynchronous fast-model helper for titles and descriptions.
+- `macagentic/ui/helpers/assistant_text.py`: Extract assistant text from model responses.
+- `macagentic/ui/screenshot.py`: Quartz window screenshot capture.
+- `macagentic/ui/screenshot_cli.py`: CLI entry point for screenshot capture.
+- `macagentic/ui/testing.py`: In-process Cocoa UI test driver.
