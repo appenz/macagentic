@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,14 +40,22 @@ class MacAgenticConfig:
     openai_api_key: str = ""
     brave_api_key: str = ""
     custom_prompt: str = ""
+    mounts: dict[str, str] = field(default_factory=dict)
 
 
 def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
+    mounts = data.get("mounts", {})
+    if not isinstance(mounts, dict) or not all(
+        isinstance(name, str) and isinstance(path, str)
+        for name, path in mounts.items()
+    ):
+        raise ValueError("Config 'mounts' must map names to directory paths.")
     return MacAgenticConfig(
         model=str(data.get("model", "openai/gpt-5-mini") or ""),
         openai_api_key=str(data.get("openai_api_key", "") or ""),
         brave_api_key=str(data.get("brave_api_key", "") or ""),
         custom_prompt=str(data.get("custom_prompt", "") or ""),
+        mounts=dict(mounts),
     )
 
 

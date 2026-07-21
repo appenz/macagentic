@@ -58,10 +58,10 @@ user-invocable: false
         "model-skill",
     ]
     assert catalog.render_prompt() == (
-        f"alpha-skill - Do alpha work. - "
-        f"{(tmp_path / 'alpha-skill' / 'SKILL.md').resolve()}\n"
-        f"model-skill - Model-only work. - "
-        f"{(tmp_path / 'model-skill' / 'SKILL.md').resolve()}"
+        "alpha-skill - Do alpha work. - "
+        "skills/alpha-skill/SKILL.md\n"
+        "model-skill - Model-only work. - "
+        "skills/model-skill/SKILL.md"
     )
 
 
@@ -146,7 +146,10 @@ def test_loads_user_and_tool_skills(tmp_path: Path) -> None:
     assert catalog.skills[0].source == (
         tool_skills / "calendar-agenda" / "SKILL.md"
     ).resolve()
-    assert str(catalog.skills[0].source) in catalog.render_prompt()
+    assert (
+        "skills/calendar-agenda/SKILL.md"
+        in catalog.render_prompt()
+    )
 
 
 def test_rejects_duplicate_user_and_tool_skill_names(tmp_path: Path) -> None:

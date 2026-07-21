@@ -15,7 +15,8 @@ to call `ui.update()`. The UI may call only `agent.run_turn(request)` and
 ```python
 class Agent:
     # Dependencies
-    workspace: Path
+    id: int
+    root: Path
     model: ResponseModel
     tool_runner: ShellEnvironment
     skill_catalog: SkillCatalog
@@ -45,7 +46,8 @@ class Agent:
 
 ## Fields
 
-- `workspace`: Working directory used for local tool execution.
+- `id`: Process-local positive integer assigned by `MacAgenticApp`.
+- `root`: Clean working directory at `~/.tmpagent/<id>`.
 - `model`: mini-SWE-agent model adapter used for model calls and tool messages.
 - `tool_runner`: Local shell-command executor used for tool calls and interruption.
 - `skill_catalog`: Immutable skill definitions used in the prompt and slash-command expansion.
@@ -63,6 +65,14 @@ class Agent:
 mini-SWE-agent provides the model and environment foundations; macAgentic
 owns its smaller agent loop rather than using `DefaultAgent`. Model calls
 use LiteLLM's native Responses API.
+
+## Filesystem
+
+Every new `Agent` wipes and recreates `~/.tmpagent/<id>` and uses it as the
+working directory for shell commands. `$AGENT_ROOT` contains its absolute path;
+`~` remains the user's normal home directory. The root contains a `skills/`
+symlink farm plus the user mounts configured in `[mounts]`. Model-facing paths
+remain relative to the agent root.
 
 ## Agent Loop
 

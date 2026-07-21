@@ -10,8 +10,10 @@ class MacAgenticApp:
     custom_instructions: str | None
     tool_instructions: str | None
     skill_catalog: SkillCatalog
+    user_mounts: dict[str, str]
     show_tool_output: bool
     screenshot_path: Path | None
+    next_agent_id: int
 
     def __init__(self) -> None: ...
 
@@ -23,6 +25,7 @@ class MacAgenticApp:
         custom_instructions: str | None,
         tool_instructions: str | None,
         skill_catalog: SkillCatalog,
+        user_mounts: dict[str, str],
         show_tool_output: bool,
         screenshot_path: Path | None = None,
     ) -> None: ...
@@ -32,3 +35,7 @@ class MacAgenticApp:
 
 app = MacAgenticApp()
 ```
+
+`create_agent()` assigns monotonically increasing integer IDs starting at one.
+IDs restart with the application, so an agent reuses and wipes the same
+`~/.tmpagent/<id>` path on a later application run.

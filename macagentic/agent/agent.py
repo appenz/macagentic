@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Protocol
@@ -10,6 +11,10 @@ import yaml
 from minisweagent import package_dir
 
 from macagentic.agent.conversation_log import ConversationLog
+from macagentic.agent.filesystem import (
+    create_agent_root,
+    render_filesystem_instructions,
+)
 from macagentic.agent.model import ResponseModel
 from macagentic.agent.shell import ShellEnvironment
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
@@ -19,6 +24,7 @@ DEFAULT_PROMPT_PATH = Path(__file__).parent / "prompts" / "default.md"
 CUSTOM_INSTRUCTIONS_PLACEHOLDER = "{{CUSTOM_INSTRUCTIONS}}"
 TOOLS_PLACEHOLDER = "{{TOOLS}}"
 SKILLS_PLACEHOLDER = "{{SKILLS}}"
+FILESYSTEM_PLACEHOLDER = "{{FILESYSTEM}}"
 
 
 class UI(Protocol):
@@ -29,6 +35,7 @@ def load_system_prompt(
     custom_instructions: str | None = None,
     tool_instructions: str | None = None,
     skill_catalog: SkillCatalog | None = None,
+    filesystem_instructions: str | None = None,
 ) -> str:
     prompt = DEFAULT_PROMPT_PATH.read_text()
     missing = [
@@ -37,6 +44,7 @@ def load_system_prompt(
             ("custom instructions", CUSTOM_INSTRUCTIONS_PLACEHOLDER),
             ("tools", TOOLS_PLACEHOLDER),
             ("skills", SKILLS_PLACEHOLDER),
+            ("filesystem", FILESYSTEM_PLACEHOLDER),
         )
         if placeholder not in prompt
     ]
@@ -47,6 +55,9 @@ def load_system_prompt(
         )
     return (
         prompt.replace(
+            FILESYSTEM_PLACEHOLDER,
+            (filesystem_instructions or "").strip(),
+        ).replace(
             CUSTOM_INSTRUCTIONS_PLACEHOLDER,
             (custom_instructions or "").strip(),
         ).replace(
@@ -61,7 +72,8 @@ def load_system_prompt(
 
 class Agent:
     # Dependencies
-    workspace: Path
+    id: int
+    root: Path
     model: ResponseModel
     tool_runner: ShellEnvironment
     skill_catalog: SkillCatalog
@@ -79,16 +91,25 @@ class Agent:
 
     def __init__(
         self,
-        workspace: Path,
+        agent_id: int,
         model_name: str | None = None,
         *,
         ui: UI | None = None,
         custom_instructions: str | None = None,
         tool_instructions: str | None = None,
         skill_catalog: SkillCatalog | None = None,
+        user_mounts: Mapping[str, str] | None = None,
+        roots_directory: Path | None = None,
     ) -> None:
-        self.workspace = workspace.resolve()
+        self.id = agent_id
         self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
+        mounts = dict(user_mounts or {})
+        self.root = create_agent_root(
+            self.id,
+            self.skill_catalog,
+            mounts,
+            roots_directory=roots_directory,
+        )
         self.conversation_log = ConversationLog()
         self.usage = UsageTracker()
         self.ui = ui
@@ -103,8 +124,13 @@ class Agent:
         self.model = ResponseModel(
             **(config["model"] | {"model_name": selected_model})
         )
+        environment_config = config["environment"] | {
+            "cwd": str(self.root),
+            "env": config["environment"].get("env", {})
+            | {"AGENT_ROOT": str(self.root)},
+        }
         self.tool_runner = ShellEnvironment(
-            **(config["environment"] | {"cwd": str(self.workspace)})
+            **environment_config
         )
         self.messages: list[dict] = []
         self._append_message(
@@ -114,6 +140,7 @@ class Agent:
                     custom_instructions,
                     tool_instructions,
                     self.skill_catalog,
+                    render_filesystem_instructions(mounts),
                 ),
             }
         )

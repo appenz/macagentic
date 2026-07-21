@@ -98,6 +98,7 @@ def main() -> None:
         custom_instructions=custom_instructions,
         tool_instructions=tool_instructions,
         skill_catalog=skill_catalog,
+        user_mounts=config.mounts,
         show_tool_output=args.tooloutput,
         screenshot_path=args.screenshot,
     )

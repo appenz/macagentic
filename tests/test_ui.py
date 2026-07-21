@@ -10,7 +10,11 @@ from macagentic.ui.updates import SetTabTitle
 
 
 class FakeAgent:
+    next_id = 1
+
     def __init__(self) -> None:
+        self.id = self.next_id
+        type(self).next_id += 1
         self.ui = None
         self.conversation_log = ConversationLog()
         self.usage = UsageTracker()

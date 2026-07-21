@@ -10,8 +10,10 @@ class MacAgenticApp:
     custom_instructions: str | None
     tool_instructions: str | None
     skill_catalog: SkillCatalog
+    user_mounts: dict[str, str]
     show_tool_output: bool
     screenshot_path: Path | None
+    next_agent_id: int
 
     def __init__(self) -> None:
         self.workspace = Path.cwd()
@@ -19,8 +21,10 @@ class MacAgenticApp:
         self.custom_instructions = None
         self.tool_instructions = None
         self.skill_catalog = EMPTY_SKILL_CATALOG
+        self.user_mounts = {}
         self.show_tool_output = False
         self.screenshot_path = None
+        self.next_agent_id = 1
 
     def configure(
         self,
@@ -30,6 +34,7 @@ class MacAgenticApp:
         custom_instructions: str | None,
         tool_instructions: str | None,
         skill_catalog: SkillCatalog,
+        user_mounts: dict[str, str],
         show_tool_output: bool,
         screenshot_path: Path | None = None,
     ) -> None:
@@ -38,17 +43,22 @@ class MacAgenticApp:
         self.custom_instructions = custom_instructions
         self.tool_instructions = tool_instructions
         self.skill_catalog = skill_catalog
+        self.user_mounts = dict(user_mounts)
         self.show_tool_output = show_tool_output
         self.screenshot_path = screenshot_path
+        self.next_agent_id = 1
 
     def create_agent(self) -> Agent:
-        return Agent(
-            self.workspace,
+        agent = Agent(
+            self.next_agent_id,
             model_name=self.model_name,
             custom_instructions=self.custom_instructions,
             tool_instructions=self.tool_instructions,
             skill_catalog=self.skill_catalog,
+            user_mounts=self.user_mounts,
         )
+        self.next_agent_id += 1
+        return agent
 
 
 app = MacAgenticApp()

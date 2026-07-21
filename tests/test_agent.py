@@ -121,12 +121,21 @@ def message_payloads(agent: Agent) -> list[dict]:
     ]
 
 
+def make_agent(tmp_path: Path, **kwargs) -> Agent:
+    return Agent(
+        1,
+        roots_directory=tmp_path / "agent-roots",
+        **kwargs,
+    )
+
+
 def test_default_prompt_has_all_placeholders_replaced() -> None:
     prompt = load_system_prompt()
 
     assert "{{CUSTOM_INSTRUCTIONS}}" not in prompt
     assert "{{TOOLS}}" not in prompt
     assert "{{SKILLS}}" not in prompt
+    assert "{{FILESYSTEM}}" not in prompt
     assert "the agent returns to the user" in prompt
 
 
@@ -138,6 +147,23 @@ def test_custom_and_tool_instructions_are_inserted() -> None:
 
     assert "## Custom Instructions\n\nAlways answer briefly." in prompt
     assert "# Available Tools\n\n### `things`" in prompt
+
+
+def test_agent_uses_its_root_for_tools_and_prompt(tmp_path: Path) -> None:
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    agent = make_agent(
+        tmp_path,
+        user_mounts={"notes": str(notes)},
+    )
+
+    assert agent.id == 1
+    assert agent.root == tmp_path / "agent-roots" / "1"
+    assert agent.tool_runner.config.cwd == str(agent.root)
+    assert agent.tool_runner.config.env["AGENT_ROOT"] == str(agent.root)
+    assert "`notes/` - configured user directory" in (
+        agent.messages[0]["content"]
+    )
 
 
 def test_response_model_accepts_plain_text_and_reasoning_items() -> None:
@@ -162,8 +188,10 @@ def test_response_model_accepts_plain_text_and_reasoning_items() -> None:
     ]
 
 
-def test_agent_copies_every_message_into_conversation_log() -> None:
-    agent = Agent(Path.cwd(), ui=None)
+def test_agent_copies_every_message_into_conversation_log(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path, ui=None)
     agent.model = FakeModel()
 
     agent.run_turn("What is 1+1?")
@@ -176,7 +204,9 @@ def test_agent_copies_every_message_into_conversation_log() -> None:
     ] == [{"content": "What is 1+1?"}]
 
 
-def test_agent_expands_skills_only_in_model_messages() -> None:
+def test_agent_expands_skills_only_in_model_messages(
+    tmp_path: Path,
+) -> None:
     catalog = SkillCatalog(
         (
             Skill(
@@ -186,7 +216,7 @@ def test_agent_expands_skills_only_in_model_messages() -> None:
             ),
         )
     )
-    agent = Agent(Path.cwd(), ui=None, skill_catalog=catalog)
+    agent = make_agent(tmp_path, ui=None, skill_catalog=catalog)
     agent.model = FakeModel()
 
     agent.run_turn("/summarize this document")
@@ -200,8 +230,8 @@ def test_agent_expands_skills_only_in_model_messages() -> None:
     }
 
 
-def test_agent_runs_tools_and_records_raw_execution() -> None:
-    agent = Agent(Path.cwd(), ui=None)
+def test_agent_runs_tools_and_records_raw_execution(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, ui=None)
     agent.model = ToolModel()
     agent.tool_runner = FakeToolRunner()
 
@@ -220,8 +250,8 @@ def test_agent_runs_tools_and_records_raw_execution() -> None:
     assert message_payloads(agent) == agent.messages
 
 
-def test_agent_tracks_usage_from_every_model_call() -> None:
-    agent = Agent(Path.cwd(), ui=None)
+def test_agent_tracks_usage_from_every_model_call(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, ui=None)
     agent.model = FakeModel()
     agent.model.query = lambda _messages: text_response(
         "Done.",
@@ -246,8 +276,10 @@ def test_agent_tracks_usage_from_every_model_call() -> None:
     assert snapshot.cost == 0.125
 
 
-def test_interrupt_releases_model_wait_and_discards_late_result() -> None:
-    agent = Agent(Path.cwd(), ui=None)
+def test_interrupt_releases_model_wait_and_discards_late_result(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path, ui=None)
     model = BlockingModel()
     agent.model = model
     turn = threading.Thread(target=agent.run_turn, args=("Wait",))
@@ -266,8 +298,10 @@ def test_interrupt_releases_model_wait_and_discards_late_result() -> None:
     assert agent.conversation_log.snapshot()[-1].kind == "interrupted"
 
 
-def test_interrupt_prunes_incomplete_tool_call_and_records_discard() -> None:
-    agent = Agent(Path.cwd(), ui=None)
+def test_interrupt_prunes_incomplete_tool_call_and_records_discard(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path, ui=None)
     agent.model = ToolModel()
     runner = BlockingToolRunner()
     agent.tool_runner = runner

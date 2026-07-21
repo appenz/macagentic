@@ -98,7 +98,11 @@ def _load_skill_directories(directories: list[Path]) -> SkillCatalog:
 
 
 def _render_skill(skill: Skill) -> str:
-    source = f" - {skill.source}" if skill.source else ""
+    source = (
+        f" - skills/{skill.name}/SKILL.md"
+        if skill.source
+        else ""
+    )
     return f"{skill.name} - {skill.description}{source}"
 
 

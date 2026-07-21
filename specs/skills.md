@@ -10,7 +10,8 @@ startup fails with both paths when a duplicate is found.
 At startup, macAgentic reads the skills once and replaces `{{SKILLS}}` in the
 system prompt with a generated list. Skills with
 `disable-model-invocation: true` are omitted. The agent loads a listed skill by
-reading the exact `SKILL.md` path shown in that list.
+reading `skills/<skillname>/SKILL.md` from its agent root. Each entry in the
+root's `skills/` directory links to the original skill directory.
 
 A whitespace-delimited `/skillname` in user input expands to that skill's
 instructions without its frontmatter. Expansion applies only to skills where

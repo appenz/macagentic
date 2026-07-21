@@ -144,8 +144,8 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
     created = []
 
     class FakeAgent:
-        def __init__(self, workspace, **kwargs) -> None:
-            created.append((workspace, kwargs))
+        def __init__(self, agent_id, **kwargs) -> None:
+            created.append((agent_id, kwargs))
 
     monkeypatch.setattr("macagentic.app.Agent", FakeAgent)
     application = MacAgenticApp()
@@ -155,16 +155,20 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
         custom_instructions="custom",
         tool_instructions="tools",
         skill_catalog=EMPTY_SKILL_CATALOG,
+        user_mounts={"notes": "~/notes"},
         show_tool_output=True,
     )
 
     application.create_agent()
+    application.create_agent()
 
-    workspace, kwargs = created[0]
-    assert workspace == Path.cwd()
+    agent_id, kwargs = created[0]
+    assert agent_id == 1
+    assert created[1][0] == 2
     assert kwargs["model_name"] == "test-model"
     assert kwargs["custom_instructions"] == "custom"
     assert kwargs["tool_instructions"] == "tools"
+    assert kwargs["user_mounts"] == {"notes": "~/notes"}
 
 
 def test_tool_update_description_is_truncated_to_80_characters() -> None:

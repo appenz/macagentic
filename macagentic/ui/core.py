@@ -303,7 +303,6 @@ class MacAgenticUI:
 
     tabs: list[UITab]
     active_index: int
-    next_tab_id: int
     focused_block: int
     window: NSWindow | None
     input_field: NSTextView | None
@@ -334,9 +333,8 @@ class MacAgenticUI:
         self.text_view = None
         self.renderer = MarkdownRenderer()
         agent.ui = self
-        self.tabs = [UITab(id=1, agent=agent)]
+        self.tabs = [UITab(id=agent.id, agent=agent)]
         self.active_index = 0
-        self.next_tab_id = 2
         self.focused_block = -1
         self.update_queue: queue.Queue[UIUpdate] = queue.Queue()
 
@@ -385,8 +383,7 @@ class MacAgenticUI:
         self._save_input()
         agent = app.create_agent()
         agent.ui = self
-        self.tabs.append(UITab(id=self.next_tab_id, agent=agent))
-        self.next_tab_id += 1
+        self.tabs.append(UITab(id=agent.id, agent=agent))
         self.active_index = len(self.tabs) - 1
         if self.window is not None:
             self._render_window()
@@ -404,8 +401,7 @@ class MacAgenticUI:
         if not self.tabs:
             agent = app.create_agent()
             agent.ui = self
-            self.tabs.append(UITab(id=self.next_tab_id, agent=agent))
-            self.next_tab_id += 1
+            self.tabs.append(UITab(id=agent.id, agent=agent))
             self.active_index = 0
         else:
             self.active_index = min(self.active_index, len(self.tabs) - 1)
