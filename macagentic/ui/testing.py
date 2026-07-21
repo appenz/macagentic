@@ -1,4 +1,4 @@
-"""In-process Cocoa UI instrumentation adapted from appenz/macLLM."""
+"""In-process Cocoa UI instrumentation."""
 
 import time
 from collections.abc import Callable

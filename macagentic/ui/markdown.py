@@ -1,4 +1,4 @@
-"""Native Cocoa Markdown rendering adapted from appenz/macLLM (Apache-2.0)."""
+"""Native Cocoa Markdown rendering."""
 
 from hashlib import sha1
 import re

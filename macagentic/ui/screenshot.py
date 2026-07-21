@@ -1,4 +1,4 @@
-"""Quartz screenshot capture adapted from appenz/macLLM (Apache-2.0)."""
+"""Quartz screenshot capture."""
 
 import Quartz
 from AppKit import NSBitmapImageRep, NSPNGFileType

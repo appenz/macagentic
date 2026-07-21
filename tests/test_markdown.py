@@ -79,7 +79,7 @@ def test_markdown_renders_status_as_subdued_plain_text() -> None:
     assert _style_at(rendered, "Reading").paragraphSpacingBefore() == 0
 
 
-def test_markdown_lists_use_macllm_hanging_indents_and_spacing() -> None:
+def test_markdown_lists_use_hanging_indents_and_spacing() -> None:
     renderer = MarkdownRenderer()
     rendered = renderer.render(
         "Intro\n\n"
@@ -111,7 +111,7 @@ def test_markdown_lists_use_macllm_hanging_indents_and_spacing() -> None:
     assert "Second item\nAfter" in text
 
 
-def test_markdown_uses_macllm_block_transition_spacing() -> None:
+def test_markdown_uses_block_transition_spacing() -> None:
     renderer = MarkdownRenderer()
     color = NSColor.blackColor()
 
@@ -150,7 +150,7 @@ def test_markdown_uses_macllm_block_transition_spacing() -> None:
     ).paragraphSpacingBefore() == BLOCK_GAP
 
 
-def test_markdown_list_outer_and_internal_spacing_matches_macllm() -> None:
+def test_markdown_list_outer_and_internal_spacing() -> None:
     renderer = MarkdownRenderer()
     rendered = renderer.render(
         "Intro\n\n- One\n- Two\n- Three\n\nAfter",
@@ -165,7 +165,7 @@ def test_markdown_list_outer_and_internal_spacing_matches_macllm() -> None:
     assert styles[4].paragraphSpacingBefore() == BLOCK_GAP
 
 
-def test_markdown_heading_typography_matches_macllm() -> None:
+def test_markdown_heading_typography() -> None:
     renderer = MarkdownRenderer()
     rendered = renderer.render(
         "# Title\n\n## Section\n\n### Subsection",
@@ -191,7 +191,7 @@ def test_markdown_heading_typography_matches_macllm() -> None:
         assert style.maximumLineHeight() == line_height
 
 
-def test_markdown_heavy_block_layout_matches_macllm() -> None:
+def test_markdown_heavy_block_layout() -> None:
     renderer = MarkdownRenderer()
     rendered = renderer.render(
         "Intro\n\n| A |\n|---|\n| 1 |",
@@ -213,7 +213,7 @@ def test_markdown_heavy_block_layout_matches_macllm() -> None:
     assert style.paragraphSpacingBefore() == PARAGRAPH_GAP
 
 
-def test_markdown_links_and_table_alignment_match_macllm() -> None:
+def test_markdown_links_and_table_alignment() -> None:
     renderer = MarkdownRenderer()
     links = renderer.render(
         "Visit https://example.com or [docs](https://example.com/docs).",
