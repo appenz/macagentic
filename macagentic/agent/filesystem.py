@@ -69,6 +69,7 @@ def render_filesystem_instructions(user_mounts: Mapping[str, str]) -> str:
         "Your current working directory is this agent's temporary root.",
         "Use short paths relative to it. `~` remains the user's normal home",
         "directory, while `$AGENT_ROOT` contains the absolute path to this root.",
+        "Directories in the agent root may be symlinks; use `rg --follow` or `find -L`.",
         "",
         "Available directories:",
         "- `skills/` - available agent skills",

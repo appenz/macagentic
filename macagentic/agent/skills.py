@@ -98,12 +98,7 @@ def _load_skill_directories(directories: list[Path]) -> SkillCatalog:
 
 
 def _render_skill(skill: Skill) -> str:
-    source = (
-        f" - skills/{skill.name}/SKILL.md"
-        if skill.source
-        else ""
-    )
-    return f"{skill.name} - {skill.description}{source}"
+    return f"{skill.name} - {skill.description}"
 
 
 def _read_skill(path: Path, name: str) -> Skill:

@@ -21,7 +21,7 @@ commands for you. Do not modify files unless the user requests a change.
 # Available Skills
 
 You have access to agent skills that help you fulfill tasks.
-Load a skill by reading the SKILL.md path listed for it below.
-Below a list of skills, the format is <skill name> - Description - SKILL.md path.
+Load a skill by reading `skills/<skill name>/SKILL.md`.
+Below is a list of skills in the format `<skill name> - Description`.
 
 {{SKILLS}}
