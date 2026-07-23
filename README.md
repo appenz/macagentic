@@ -28,10 +28,53 @@ make test-ui
 make debug-render QUERY="Show a Markdown table"
 ```
 
+### Testing
+
+Core tests (run anywhere):
+
+```sh
+make test            # all non-UI tests
+make check-tools     # validate tool layout
+make test-tools      # only tool tests
+```
+
+Hardware tests (macOS only, requires real screencapture/osascript):
+
+```sh
+uv run pytest -m hardware -v
+```
+
+End-to-end vision model test (sends a real screenshot to a local vision model):
+
+```sh
+# Default: fast-qwen on 192.168.1.157
+uv run pytest tools/ui/tests/test_vision_pipeline.py -m hardware -v
+
+# Or point at deep-qwen:
+uv run pytest tools/ui/tests/test_vision_pipeline.py -m hardware -v \
+    --vision-url http://192.168.1.161:8081/v1
+```
+
 Agent tools live in `tools/<name>/` with a same-named shell launcher, a
 `main.py` implementation, `PROMPT.md`, and colocated tests. `make install-tools` creates
 safe per-user symlinks in `~/.local/bin`; ensure that directory is on `PATH`.
 Remove this project's links with `make uninstall-tools`.
+
+### Available Tools
+
+**`ui` — macOS UI automation (screenshot, click, type)**
+
+Captures screenshots and sends them to the model as proper image content when
+using a vision-capable model. Requires `~/.local/bin` on `PATH`:
+
+```sh
+make install-tools   # create symlinks in ~/.local/bin
+ui screenshot         # capture screen (output sent to model as image)
+ui click 500 300      # click at coordinates
+ui type "hello"       # send keystrokes
+```
+
+**`things` — macOS Things app integration.**
 
 `make run` and `make runui` regenerate `.build/tools.md` from each tool's
 `PROMPT.md` and append it to the system prompt. They do not install tools.

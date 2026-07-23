@@ -25,4 +25,5 @@ dev = [
 addopts = "-m 'not uitest'"
 markers = [
     "uitest: opens the native Cocoa UI",
+    "hardware: requires real macOS commands (screencapture, osascript)",
 ]

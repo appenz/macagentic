@@ -7,6 +7,10 @@ from pathlib import Path
 import yaml
 from minisweagent import package_dir
 from minisweagent.models.litellm_response_model import LitellmResponseModel
+from minisweagent.models.utils.openai_multimodal import (
+    DEFAULT_MULTIMODAL_REGEX,
+    expand_multimodal_content,
+)
 
 from macagentic.agent.environment import InterruptibleLocalEnvironment
 from macagentic.agent.transcript import Transcript
@@ -35,6 +39,12 @@ class ResponseModel(LitellmResponseModel):
         ):
             return []
         return super()._parse_actions(response)
+
+    def format_observation_messages(
+        self, message: dict, outputs: list[dict], template_vars: dict | None = None
+    ) -> list[dict]:
+        msgs = super().format_observation_messages(message, outputs, template_vars)
+        return expand_multimodal_content(msgs, pattern=self.config.multimodal_regex)
 
 
 def load_system_prompt(
@@ -93,7 +103,10 @@ class Control:
             (Path(package_dir) / "config" / "mini.yaml").read_text()
         )
         self.model = ResponseModel(
-            **(config["model"] | {"model_name": self.model_name})
+            **(config["model"] | {
+                "model_name": self.model_name,
+                "multimodal_regex": DEFAULT_MULTIMODAL_REGEX,
+            })
         )
         self.environment = InterruptibleLocalEnvironment(
             **(config["environment"] | {"cwd": str(self.workspace)})

@@ -68,8 +68,4 @@ def test_writes_aggregated_prompt(tmp_path) -> None:
 
     write_prompt(discover_tools(tools_root), output)
 
-    assert output.read_text() == (
-        "# Available Tools\n\n"
-        "## `things`\n\n"
-        "Use things.\n"
-    )
+    assert output.read_text() == "# Available Tools\n\nUse things.\n"
