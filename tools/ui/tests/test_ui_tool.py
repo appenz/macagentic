@@ -30,7 +30,7 @@ def _mock_osascript(args, **kwargs):
     return SimpleNamespace(returncode=0)
 
 
-def test_screenshot_stdout_returns_base64(tmp_path, monkeypatch) -> None:
+def test_screenshot_stdout_returns_base64(tmp_path, monkeypatch, capsys) -> None:
     def capture_write(args, **kw):
         Path(args[-1]).write_bytes(FAKE_PNG)
         return SimpleNamespace(returncode=0)
@@ -39,6 +39,11 @@ def test_screenshot_stdout_returns_base64(tmp_path, monkeypatch) -> None:
 
     result = ui_tool.main(["screenshot"])
     assert result == 0
+    output = capsys.readouterr().out
+    assert "<MSWEA_MULTIMODAL_CONTENT>" in output
+    assert "<CONTENT_TYPE>image_url</CONTENT_TYPE>" in output
+    assert "data:image/png;base64," in output
+    assert "</MSWEA_MULTIMODAL_CONTENT>" in output
 
 
 def test_screenshot_save_to_file(tmp_path, monkeypatch) -> None:
@@ -122,15 +127,48 @@ def test_click_rejects_non_int() -> None:
 import subprocess as _sp
 
 
+def test_screenshot_multimodal_expandable(tmp_path, monkeypatch) -> None:
+    """Verify screenshot output is parseable by the multimodal pipeline."""
+    from minisweagent.models.utils.openai_multimodal import (
+        DEFAULT_MULTIMODAL_REGEX,
+        _expand_content_string,
+    )
+
+    def capture_write(args, **kw):
+        Path(args[-1]).write_bytes(FAKE_PNG)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ui_tool.subprocess, "run", capture_write)
+
+    import io
+    old = sys.stdout
+    sys.stdout = buf = io.StringIO()
+    try:
+        ui_tool.main(["screenshot"])
+    finally:
+        sys.stdout = old
+
+    expanded = _expand_content_string(content=buf.getvalue(), pattern=DEFAULT_MULTIMODAL_REGEX)
+    assert len(expanded) == 1
+    assert expanded[0]["type"] == "image_url"
+    assert expanded[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
 @pytest.mark.hardware
 def test_screenshot_integration() -> None:
-    """Real screencapture produces valid base64 PNG."""
+    """Real screencapture produces valid multimodal-wrapped output."""
     result = _sp.run(
         [sys.executable, str(TOOL_PATH), "screenshot"],
         capture_output=True,
     )
     assert result.returncode == 0
-    decoded = base64.b64decode(result.stdout)
+    text = result.stdout.decode()
+    assert "<MSWEA_MULTIMODAL_CONTENT>" in text
+    # Extract base64 from the tag wrapper and verify it's valid PNG
+    import re
+    m = re.search(r"data:image/png;base64,([^<]+)", text)
+    assert m is not None
+    decoded = base64.b64decode(m.group(1))
     assert len(decoded) > 1000
     assert decoded[:8] == b"\x89PNG\r\n\x1a\n"
 

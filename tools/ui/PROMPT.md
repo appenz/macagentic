@@ -5,7 +5,7 @@
 
 **Use cases:**
 - When the task requires interacting with a GUI application (Safari, Finder, etc.)
-- When you need to see what's on screen (screenshot returns base64 PNG)
+- When you need to see what's on screen — screenshot output is wrapped in `<MSWEA_MULTIMODAL_CONTENT>` tags so vision models receive it as an image automatically
 - When clicking buttons, menus, or UI elements is needed
 
 **How to use for Safari navigation:**

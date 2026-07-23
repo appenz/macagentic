@@ -41,7 +41,7 @@ def screenshot(window_name: str | None = None, output_path: str | None = None) -
         finally:
             Path(tmp_path).unlink(missing_ok=True)
     
-    return base64.b64encode(data).decode('utf-8')
+    return f"<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>data:image/png;base64,{base64.b64encode(data).decode('utf-8')}</MSWEA_MULTIMODAL_CONTENT>"
 
 
 def ui_click(x: int, y: int) -> None:
@@ -106,7 +106,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.output:
                 print(f"Saved to {args.output}")
             else:
-                # Print base64 to stdout for agent to read (no newline)
+                # Wrapped in <MSWEA_MULTIMODAL_CONTENT> tags so vision models
+                # pick it up automatically when multimodal_regex is configured.
                 sys.stdout.write(data)
                 sys.stdout.flush()
         elif args.command == "click":
