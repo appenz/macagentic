@@ -161,10 +161,15 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
 
     application.create_agent()
     application.create_agent()
+    application.create_agent(agent_id=7, messages=[{"role": "user"}])
+    application.create_agent()
 
     agent_id, kwargs = created[0]
     assert agent_id == 1
     assert created[1][0] == 2
+    assert created[2][0] == 7
+    assert created[3][0] == 8
+    assert created[2][1]["messages"] == [{"role": "user"}]
     assert kwargs["model_name"] == "test-model"
     assert kwargs["custom_instructions"] == "custom"
     assert kwargs["tool_instructions"] == "tools"

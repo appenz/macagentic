@@ -36,6 +36,5 @@ class MacAgenticApp:
 app = MacAgenticApp()
 ```
 
-`create_agent()` assigns monotonically increasing integer IDs starting at one.
-IDs restart with the application, so an agent reuses and wipes the same
-`~/.tmpagent/<id>` path on a later application run.
+`create_agent()` assigns monotonically increasing integer IDs. Restored IDs
+resume the sequence, and existing `~/.tmpagent/<id>` roots are reused unchanged.

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from macagentic.agent import Agent
+from macagentic.agent import Agent, ConversationLog
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 
 
@@ -48,17 +48,29 @@ class MacAgenticApp:
         self.screenshot_path = screenshot_path
         self.next_agent_id = 1
 
-    def create_agent(self, *, render_markdown: bool = False) -> Agent:
+    def create_agent(
+        self,
+        *,
+        render_markdown: bool = False,
+        agent_id: int | None = None,
+        messages: list[dict] | None = None,
+        conversation_log: ConversationLog | None = None,
+    ) -> Agent:
+        selected_id = (
+            agent_id if agent_id is not None else self.next_agent_id
+        )
         agent = Agent(
-            self.next_agent_id,
+            selected_id,
             model_name=self.model_name,
             custom_instructions=self.custom_instructions,
             tool_instructions=self.tool_instructions,
             skill_catalog=self.skill_catalog,
             user_mounts=self.user_mounts,
             render_markdown=render_markdown,
+            messages=messages,
+            conversation_log=conversation_log,
         )
-        self.next_agent_id += 1
+        self.next_agent_id = max(self.next_agent_id, selected_id + 1)
         return agent
 
 

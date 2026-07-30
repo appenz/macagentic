@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
@@ -26,10 +25,8 @@ def create_agent_root(
         roots_directory or Path.home() / ".tmpagent"
     ).expanduser()
     root = parent / str(agent_id)
-    if root.is_symlink():
-        root.unlink()
-    elif root.exists():
-        shutil.rmtree(root)
+    if root.exists():
+        return root
     root.mkdir(parents=True)
 
     skills_directory = root / "skills"

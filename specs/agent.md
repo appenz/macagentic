@@ -68,8 +68,8 @@ use LiteLLM's native Responses API.
 
 ## Filesystem
 
-Every new `Agent` wipes and recreates `~/.tmpagent/<id>` and uses it as the
-working directory for shell commands. `$AGENT_ROOT` contains its absolute path;
+An `Agent` reuses `~/.tmpagent/<id>` when present, otherwise creates it, and
+uses it for shell commands. `$AGENT_ROOT` contains its absolute path;
 `~` remains the user's normal home directory. The root contains a `skills/`
 symlink farm plus the user mounts configured in `[mounts]`. Model-facing paths
 remain relative to the agent root.

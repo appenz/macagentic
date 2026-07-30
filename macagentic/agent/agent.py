@@ -127,6 +127,8 @@ class Agent:
         user_mounts: Mapping[str, str] | None = None,
         roots_directory: Path | None = None,
         render_markdown: bool = False,
+        messages: list[dict] | None = None,
+        conversation_log: ConversationLog | None = None,
     ) -> None:
         self.id = agent_id
         self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
@@ -137,7 +139,11 @@ class Agent:
             mounts,
             roots_directory=roots_directory,
         )
-        self.conversation_log = ConversationLog()
+        self.conversation_log = (
+            conversation_log
+            if conversation_log is not None
+            else ConversationLog()
+        )
         self.usage = UsageTracker()
         self.ui = ui
         self.interrupted = threading.Event()
@@ -159,19 +165,22 @@ class Agent:
         self.tool_runner = ShellEnvironment(
             **environment_config
         )
-        self.messages: list[dict] = []
-        self._append_message(
-            {
-                "role": "system",
-                "content": load_system_prompt(
-                    custom_instructions,
-                    tool_instructions,
-                    self.skill_catalog,
-                    render_filesystem_instructions(mounts),
-                    render_markdown=render_markdown,
-                ),
-            }
-        )
+        if messages is not None:
+            self.messages = deepcopy(messages)
+        else:
+            self.messages = []
+            self._append_message(
+                {
+                    "role": "system",
+                    "content": load_system_prompt(
+                        custom_instructions,
+                        tool_instructions,
+                        self.skill_catalog,
+                        render_filesystem_instructions(mounts),
+                        render_markdown=render_markdown,
+                    ),
+                }
+            )
 
     @property
     def model_name(self) -> str:

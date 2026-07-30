@@ -186,6 +186,9 @@ Description helpers post
 tool call ID and rendered beside the corresponding call, regardless of the
 order in which descriptions finish.
 
+Normal termination persists open tabs and conversations; startup restores them
+when `app.workspace` matches, while runtime and display caches start fresh.
+
 ## Files
 
 - `macagentic/ui/__init__.py`: Cocoa UI entry point (`run_ui`).

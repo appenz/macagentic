@@ -15,8 +15,14 @@ class ConversationEvent:
 class ConversationLog:
     """Thread-safe, append-only application ledger for one conversation."""
 
-    def __init__(self) -> None:
-        self._events: list[ConversationEvent] = []
+    def __init__(
+        self,
+        events: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._events = [
+            ConversationEvent(event["kind"], deepcopy(event["payload"]))
+            for event in (events or [])
+        ]
         self._lock = RLock()
 
     def append_message(self, message: dict) -> None:
@@ -30,6 +36,12 @@ class ConversationLog:
     def snapshot(self) -> tuple[ConversationEvent, ...]:
         with self._lock:
             return tuple(deepcopy(self._events))
+
+    def records(self) -> list[dict[str, Any]]:
+        return [
+            {"kind": event.kind, "payload": event.payload}
+            for event in self.snapshot()
+        ]
 
     def __len__(self) -> int:
         with self._lock:

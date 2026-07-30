@@ -28,3 +28,15 @@ def test_conversation_log_snapshots_do_not_mutate_ledger() -> None:
     snapshot[0].payload["content"] = "changed"
 
     assert log.snapshot()[0].payload["content"] == "hello"
+
+
+def test_conversation_log_records_round_trip() -> None:
+    records = [
+        {"kind": "user_input", "payload": {"content": "hello"}},
+        {
+            "kind": "message",
+            "payload": {"role": "user", "content": "hello"},
+        },
+    ]
+
+    assert ConversationLog(records).records() == records

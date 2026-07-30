@@ -2,7 +2,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from macagentic.agent import Agent, ResponseModel
+from macagentic.agent import Agent, ConversationLog, ResponseModel
 from macagentic.agent.agent import load_system_prompt
 from macagentic.agent.skills import Skill, SkillCatalog
 
@@ -160,6 +160,36 @@ def test_plain_prompt_is_used_for_cli_agents(tmp_path: Path) -> None:
     assert "Final responses should be in Markdown." not in (
         agent.messages[0]["content"]
     )
+
+
+def test_agent_restores_messages_log_and_existing_root(tmp_path: Path) -> None:
+    root = tmp_path / "agent-roots" / "1"
+    root.mkdir(parents=True)
+    (root / "kept.txt").write_text("kept")
+    messages = [
+        {"role": "system", "content": "Original instructions"},
+        {"role": "user", "content": "Continue"},
+    ]
+    log = ConversationLog(
+        [
+            {
+                "kind": "message",
+                "payload": message,
+            }
+            for message in messages
+        ]
+    )
+
+    agent = make_agent(
+        tmp_path,
+        messages=messages,
+        conversation_log=log,
+    )
+
+    assert agent.messages == messages
+    assert agent.conversation_log.records() == log.records()
+    assert (agent.root / "kept.txt").read_text() == "kept"
+    assert agent.usage.snapshot().input_tokens == 0
 
 
 def test_custom_and_tool_instructions_are_inserted() -> None:

@@ -51,6 +51,7 @@ from quickmachotkey.constants import kVK_Space, optionKey
 from macagentic.agent import Agent
 from macagentic.app import app
 from macagentic.history import save_history
+from macagentic.session import SavedSession, SavedTab, save_session as write_session
 from macagentic.ui.helpers import request_fast_text
 from macagentic.ui.math_render import MathBitmapCache
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
@@ -293,6 +294,10 @@ class AppDelegate(NSObject):
             self.ui.hotkey_pressed()
         return True
 
+    def applicationWillTerminate_(self, _notification):
+        if self.ui is not None:
+            self.ui.save_session()
+
 
 @dataclass
 class UITab:
@@ -344,14 +349,23 @@ class MacAgenticUI:
     textbox_x_fudge = 3
     textbox_y_fudge = 3
 
-    def __init__(self, agent: Agent) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        *,
+        tabs: list[UITab] | None = None,
+        active_index: int = 0,
+    ) -> None:
         self.window = None
         self.input_field = None
         self.text_view = None
         self.renderer = MarkdownRenderer()
-        agent.ui = self
-        self.tabs = [UITab(id=agent.id, agent=agent)]
-        self.active_index = 0
+        self.tabs = (
+            tabs if tabs is not None else [UITab(id=agent.id, agent=agent)]
+        )
+        for tab in self.tabs:
+            tab.agent.ui = self
+        self.active_index = active_index
         self.focused_block = -1
         self.update_queue: queue.Queue[UIUpdate] = queue.Queue()
         self._rendering = False
@@ -1094,6 +1108,30 @@ class MacAgenticUI:
             self.window.orderOut_(None)
             self.window = None
         NSApplication.sharedApplication().hide_(None)
+
+    def save_session(self) -> None:
+        self._save_input()
+        for tab in self.tabs:
+            tab.agent.interrupt()
+        for tab in self.tabs:
+            if tab.thread is not None:
+                tab.thread.join()
+        write_session(
+            SavedSession(
+                workspace=str(app.workspace.resolve()),
+                active_index=self.active_index,
+                tabs=[
+                    SavedTab(
+                        id=tab.id,
+                        title=tab.title,
+                        input_text=tab.input_text,
+                        messages=tab.agent.messages,
+                        events=tab.agent.conversation_log.records(),
+                    )
+                    for tab in self.tabs
+                ],
+            )
+        )
 
     def hotkey_pressed(self, *, activate: bool = True) -> None:
         if self.window is None:

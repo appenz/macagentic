@@ -16,6 +16,7 @@ class FakeAgent:
         self.id = self.next_id
         type(self).next_id += 1
         self.ui = None
+        self.messages = []
         self.conversation_log = ConversationLog()
         self.usage = UsageTracker()
         self.model_name = "openai/gpt-5-mini"
@@ -172,3 +173,32 @@ def test_closed_tab_discards_async_update(monkeypatch) -> None:
     ui._main_thread_update()
 
     assert ui.active_tab.title == "New Agent"
+
+
+def test_ui_saves_only_persistent_tab_state(monkeypatch) -> None:
+    from macagentic.ui.core import MacAgenticUI
+
+    captured = []
+    monkeypatch.setattr(
+        "macagentic.ui.core.write_session",
+        captured.append,
+    )
+    agent = FakeAgent()
+    agent.messages = [{"role": "user", "content": "hello"}]
+    agent.conversation_log.append(
+        "user_input",
+        {"content": "hello"},
+    )
+    ui = MacAgenticUI(agent)
+    ui.active_tab.title = "Saved title"
+    ui.active_tab.input_text = "draft"
+    ui.active_tab.tool_call_descriptions["call-1"] = "cache"
+
+    ui.save_session()
+
+    saved = captured[0]
+    assert saved.active_index == 0
+    assert saved.tabs[0].title == "Saved title"
+    assert saved.tabs[0].input_text == "draft"
+    assert saved.tabs[0].messages == agent.messages
+    assert saved.tabs[0].events == agent.conversation_log.records()
