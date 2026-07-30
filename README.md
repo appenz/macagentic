@@ -15,30 +15,6 @@ uv sync
 uv run python -m macagentic --ui
 ```
 
-## Cursor mobile and non-macOS development
-
-Cursor mobile can drive Cursor cloud agents for headless development and tests.
-Those agents do not provide a macOS desktop session, so they cannot exercise the
-native Cocoa UI directly. Use them for the core harness, tools, config, usage,
-transcript, and Markdown-free tests:
-
-```sh
-make test
-make check-tools
-```
-
-The native UI remains macOS-only. Run UI-specific checks from a macOS machine:
-
-```sh
-make test-ui
-make debug-render QUERY="Show a Markdown table"
-```
-
-Agent tools live in `tools/<name>/` with a same-named shell launcher, a
-`main.py` implementation, `PROMPT.md`, and colocated tests. `make install-tools` creates
-safe per-user symlinks in `~/.local/bin`; ensure that directory is on `PATH`.
-Remove this project's links with `make uninstall-tools`.
-
 ## Tools
 
 macAgentic includes a small set of command-line tools for common agent tasks:
