@@ -14,6 +14,10 @@ import ziamath as zm
 
 _WEBVIEW: WKWebView | None = None
 
+# STIX (ziamath) glyphs measure ~10% shorter than SF Pro at the same
+# nominal point size; scale so inline math matches surrounding text.
+_ZIAMATH_SIZE_SCALE = 1.1
+
 
 @dataclass(frozen=True)
 class MathCacheKey:
@@ -101,12 +105,16 @@ def _svg_to_nsimage(
     scale_factor: float,
 ) -> NSImage:
     # WebKit snapshots at 1x are blank for small ziamath SVGs; rasterize at 2x min.
+    # CSS-scale the SVG to fill the snapshot so glyphs match font_size points.
     scale = max(scale_factor, 2.0)
     pixel_width = max(1, int(round(width * scale)))
     pixel_height = max(1, int(round(height * scale)))
     html = (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
-        "<body style='margin:0;padding:0;background:transparent;'>"
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>"
+        "html,body{margin:0;padding:0;background:transparent;overflow:hidden;}"
+        f"svg{{display:block;width:{pixel_width}px;height:{pixel_height}px;}}"
+        "</style></head><body>"
         f"{svg}</body></html>"
     )
 
@@ -162,7 +170,15 @@ def _render_latex_to_bitmap_main(
     _ensure_application()
 
     try:
-        expr = zm.Latex(latex, size=font_size, inline=inline, color=color_hex)
+        # margin=0 so SVG width/height match getsize(); default margin=1
+        # would pad the SVG and shrink glyphs when scaled into getsize bounds.
+        expr = zm.Latex(
+            latex,
+            size=font_size * _ZIAMATH_SIZE_SCALE,
+            inline=inline,
+            color=color_hex,
+            margin=0,
+        )
     except (ValueError, TypeError, SyntaxError, KeyError, AttributeError) as error:
         raise MathRenderError(f"Invalid LaTeX: {latex!r}") from error
 

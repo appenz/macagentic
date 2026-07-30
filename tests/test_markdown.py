@@ -324,3 +324,28 @@ def test_markdown_for_selection_preserves_math_markdown() -> None:
 
     copied_mixed = renderer.markdown_for_selection((0, math_index + 1))
     assert copied_mixed == "Before $x^2$"
+
+
+def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
+    """Copy must return source Markdown, including unmapped ** and blank lines."""
+    renderer = MarkdownRenderer()
+    source = (
+        "**You:** Show me Maxwell\n\n"
+        "**Gauss’s law**\n\n"
+        "$$\n"
+        r"\oint \mathbf{E}\cdot d\mathbf{A} = \frac{Q}{\varepsilon_0}"
+        "\n$$\n\n"
+        "**Ampère–Maxwell**\n\n"
+        "$$\n"
+        r"\oint \mathbf{B}\cdot d\mathbf{\ell} = \mu_0 I"
+        "\n$$\n"
+    )
+    rendered = renderer.render(source, NSColor.blackColor(), math_cache={})
+    text = str(rendered.string())
+    copied = renderer.markdown_for_selection((0, len(text)))
+
+    assert copied == source.rstrip()
+    assert "**You:**" in copied
+    assert "**Ampère–Maxwell**\n\n$$" in copied
+    assert "formMaxwell" not in copied.replace("\n", "")
+    assert "Ampère–Maxwell$$" not in copied.replace("\n", "")

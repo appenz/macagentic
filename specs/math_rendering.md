@@ -99,8 +99,11 @@ class MarkdownRenderer:
   source Markdown indices. Plain text is 1:1. A math attachment occupies one
   rendered character and maps to the full `$...$` or `$$...$$` span. UI-only
   text such as `[copy]` links has no mapping and is omitted from copy output.
-- `markdown_for_selection`: Returns the vanilla Markdown substring for a
-  rendered selection by walking `_source_map`.
+- `markdown_for_selection`: Returns a contiguous substring of
+  `_source_markdown` for the rendered selection. Overlapping map entries
+  determine the source start/end; characters between those entries (emphasis
+  markers, blank lines, softbreaks) are included. Do not reconstruct by
+  concatenating mapped fragments — that drops unmapped source characters.
 
 On render failure, `lookup_or_render_math_bitmap` raises. There is no monospace
 fallback.
@@ -111,14 +114,21 @@ Math size follows the surrounding text at render time. Inline math in body
 text uses `base_font.pointSize()`. Inline math in headings uses
 `HEADING_FONT_SIZES`. Display blocks use `FONT_SIZE`. Pass the window backing
 scale as `scale_factor` for Retina; attachment bounds stay in points. WebKit
-rasterizes at at least 2x to avoid blank snapshots. Display-block line height is
-`max(LINE_HEIGHT, height - baseline)` so tall formulas are not clipped.
+rasterizes at at least 2x to avoid blank snapshots, and the SVG is CSS-scaled
+to fill that snapshot so glyphs are not undersized. ziamath is called with
+`margin=0` and size `font_size * 1.1` so STIX glyphs optically match SF Pro.
+Display-block line height is `max(LINE_HEIGHT, height - baseline)` so tall
+formulas are not clipped.
 
 ## Copy
 
 `ConversationTextView` overrides `copy_`. Copy calls
 `renderer.markdown_for_selection(selectedRange())` and writes plain text to
 the pasteboard. This covers keyboard, menu, and context-menu Copy.
+
+Copy returns a contiguous slice of the rendered source Markdown (see
+`markdown_for_selection` above), not a reconstruction from attachment
+attributes or mapped fragments alone.
 
 A math formula is one atomic attachment character; it cannot be partially
 selected. Paste is unchanged.

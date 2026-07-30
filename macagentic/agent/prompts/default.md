@@ -4,7 +4,8 @@ Answer the user's current message directly. Use bash when it materially helps.
 After using tools, provide a final response without a tool call.
 {{#if render_markdown}}
 - Final responses should be in Markdown.
-- For equations use $...$ for inline math and $$...$$ for a block
+- For inline equations use $...$
+- For a block of equations use $$...$$, ensure any $$ is on a line by itself
 - NEVER use [ ] for equations blocks
 {{else}}
 - Final responses should be plain text. Do not use Markdown formatting.

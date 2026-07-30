@@ -394,11 +394,21 @@ class MarkdownRenderer:
         self._source_map: list[tuple[int, int, int, int]] = []
 
     def markdown_for_selection(self, char_range: tuple[int, int]) -> str:
+        """Return the contiguous source-Markdown slice for a rendered selection.
+
+        Mapped spans locate the selection in `_source_markdown`. The result is
+        one substring of that source (not a join of mapped fragments), so
+        unmapped source characters between spans — emphasis markers, blank
+        lines, softbreak newlines — are preserved. UI-only rendered text with
+        no source mapping is omitted by not extending the slice beyond the
+        overlapping mapped ranges.
+        """
         start, length = char_range
         if length <= 0:
             return ""
         end = start + length
-        parts: list[tuple[int, str]] = []
+        md_from: int | None = None
+        md_to: int | None = None
         for rendered_start, rendered_end, md_start, md_end in self._source_map:
             if rendered_end <= start or rendered_start >= end:
                 continue
@@ -412,11 +422,24 @@ class MarkdownRenderer:
             end_num = overlap_end - rendered_start
             slice_start = md_start + (md_span * start_num) // rendered_span
             slice_end = md_start + (md_span * end_num) // rendered_span
-            parts.append((overlap_start, self._source_markdown[slice_start:slice_end]))
-        if not parts:
+            if md_from is None or slice_start < md_from:
+                md_from = slice_start
+            if md_to is None or slice_end > md_to:
+                md_to = slice_end
+        if md_from is None or md_to is None or md_to <= md_from:
             return ""
-        parts.sort(key=lambda item: item[0])
-        return "".join(text for _, text in parts)
+
+        # Include unmapped source at the edges (e.g. ** markers) so copy is a
+        # true substring of the source, not a reconstruction of mapped pieces.
+        covered: set[int] = set()
+        for _r0, _r1, m0, m1 in self._source_map:
+            covered.update(range(m0, m1))
+        source_len = len(self._source_markdown)
+        while md_from > 0 and (md_from - 1) not in covered:
+            md_from -= 1
+        while md_to < source_len and md_to not in covered:
+            md_to += 1
+        return self._source_markdown[md_from:md_to]
 
     def render(
         self,
