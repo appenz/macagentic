@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from macagentic.session import (
     SavedSession,
     SavedTab,
@@ -37,8 +35,7 @@ def test_session_round_trip_and_workspace_match(tmp_path: Path) -> None:
 
     assert load_session(workspace, path=path) == session
     assert not path.with_suffix(".tmp").exists()
-    with pytest.raises(RuntimeError, match="Saved workspace"):
-        load_session(tmp_path, path=path)
+    assert load_session(tmp_path, path=path) is None
 
 
 def test_missing_session_returns_none(tmp_path: Path) -> None:

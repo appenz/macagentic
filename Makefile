@@ -1,4 +1,4 @@
-.PHONY: run runui screenshot debug-render test test-ui test-tools \
+.PHONY: run runui icon screenshot debug-render test test-ui test-tools \
 	check-tools install-tools uninstall-tools tools-prompt
 
 TOOLS_PROMPT := .build/tools.md
@@ -8,6 +8,9 @@ run: tools-prompt
 
 runui: tools-prompt
 	uv run --frozen python -m macagentic --ui --tool-instructions "$(TOOLS_PROMPT)" $(ARGS)
+
+icon:
+	uv run --frozen python scripts/render_app_icon.py
 
 screenshot:
 	uv run --frozen python -m macagentic.ui.screenshot_cli --output debug_screenshot.png

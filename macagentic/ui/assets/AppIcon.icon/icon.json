@@ -1,0 +1,18 @@
+{
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "source.png",
+          "name": "macAgentic artwork"
+        }
+      ],
+      "name": "Artwork"
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

@@ -42,9 +42,7 @@ def load_session(
         raise ValueError(f"Unsupported session version: {data['version']}")
     expected = str(workspace.resolve())
     if data["workspace"] != expected:
-        raise RuntimeError(
-            f"Saved workspace is {data['workspace']}, current workspace is {expected}"
-        )
+        return None
     return SavedSession(
         workspace=data["workspace"],
         active_index=data["active_index"],
