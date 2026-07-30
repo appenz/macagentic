@@ -7,7 +7,7 @@ def run_ui(*, initial_task: str | None = None) -> None:
 
     from macagentic.ui.core import MacAgenticUI
 
-    ui = MacAgenticUI(app.create_agent())
+    ui = MacAgenticUI(app.create_agent(render_markdown=True))
     ui.start(dont_run_app=True)
     if app.screenshot_path is not None:
         ui.hotkey_pressed()

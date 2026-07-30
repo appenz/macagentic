@@ -23,8 +23,15 @@ from Foundation import (
     NSString,
     NSURL,
 )
-from AppKit import NSTextTab
+from AppKit import NSTextAttachment, NSTextTab, NSScreen, NSTextAlignmentCenter
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 from markdown_it import MarkdownIt
+
+from macagentic.ui.math_render import (
+    MathBitmap,
+    MathCacheKey,
+    lookup_or_render_math_bitmap,
+)
 
 FONT_SIZE = 14.0
 LINE_HEIGHT = FONT_SIZE * 1.2
@@ -131,6 +138,8 @@ _BLOCK_KIND = {
     "ordered_list_open": "list",
     "table_open": "heavy",
     "fence": "heavy",
+    "math_block": "heavy",
+    "math_block_label": "heavy",
     "status": "status",
     "code_block": "heavy",
     "blockquote_open": "heavy",
@@ -229,28 +238,221 @@ def _apply_block_margins(
     return attributed
 
 
+
+def _md_line_start(source: str, line: int) -> int:
+    if line <= 0:
+        return 0
+    pos = 0
+    for _ in range(line):
+        next_pos = source.find("\n", pos)
+        if next_pos == -1:
+            return len(source)
+        pos = next_pos + 1
+    return pos
+
+
+def _md_line_range(source: str, start_line: int, end_line: int) -> tuple[int, int]:
+    return _md_line_start(source, start_line), _md_line_start(source, end_line)
+
+
+def _math_inline_source(inline_content: str, latex: str, markup: str) -> str:
+    wrapped = f"{markup}{latex}{markup}"
+    if wrapped in inline_content:
+        return wrapped
+    if markup != "$":
+        alt = f"${latex}$"
+        if alt in inline_content:
+            return alt
+    return wrapped
+
+
+def _backing_scale() -> float:
+    screen = NSScreen.mainScreen()
+    if screen is None:
+        return 1.0
+    return float(screen.backingScaleFactor())
+
+
+def _math_line_height(bitmap: MathBitmap) -> float:
+    _width, height = bitmap.size
+    return max(LINE_HEIGHT, height - bitmap.baseline)
+
+
+def _append_math_attachment(
+    result,
+    latex: str,
+    *,
+    inline: bool,
+    color,
+    font_size: float,
+    math_cache: dict[MathCacheKey, MathBitmap],
+    scale_factor: float,
+) -> tuple[int, int, MathBitmap]:
+    start = result.length()
+    bitmap = lookup_or_render_math_bitmap(
+        math_cache,
+        latex,
+        inline=inline,
+        color=color,
+        font_size=font_size,
+        scale_factor=scale_factor,
+    )
+    attachment = NSTextAttachment.alloc().init()
+    attachment.setImage_(bitmap.image)
+    width, height = bitmap.size
+    attachment.setBounds_(((0.0, bitmap.baseline), (width, height)))
+    result.appendAttributedString_(
+        NSAttributedString.attributedStringWithAttachment_(attachment)
+    )
+    return start, result.length(), bitmap
+
+
+def _linkify_text_mapped(text, color, font, md_start: int):
+    result = NSMutableAttributedString.alloc().init()
+    segments: list[tuple[int, int, int, int]] = []
+    plain_attributes = {
+        NSForegroundColorAttributeName: color,
+        NSFontAttributeName: font,
+    }
+    last_end = 0
+    rendered_at = 0
+    for match in _URL_RE.finditer(text):
+        url = _clean_url(match.group())
+        url_end = match.start() + len(url)
+        if match.start() > last_end:
+            chunk = text[last_end : match.start()]
+            result.appendAttributedString_(
+                NSAttributedString.alloc().initWithString_attributes_(
+                    chunk,
+                    plain_attributes,
+                )
+            )
+            chunk_start = rendered_at
+            rendered_at += len(chunk)
+            segments.append(
+                (chunk_start, rendered_at, md_start + last_end, md_start + match.start())
+            )
+
+        link_url = NSURL.URLWithString_(url)
+        result.appendAttributedString_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                url,
+                {
+                    NSForegroundColorAttributeName: _LINK_COLOR,
+                    NSFontAttributeName: font,
+                    NSLinkAttributeName: link_url,
+                    NSUnderlineStyleAttributeName: _UNDERLINE_STYLE,
+                    NSUnderlineColorAttributeName: _UNDERLINE_COLOR,
+                },
+            )
+        )
+        url_start = rendered_at
+        rendered_at += len(url)
+        segments.append(
+            (url_start, rendered_at, md_start + match.start(), md_start + url_end)
+        )
+        result.appendAttributedString_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                _LINK_ARROW,
+                {
+                    NSForegroundColorAttributeName: _LINK_COLOR,
+                    NSFontAttributeName: font,
+                    NSLinkAttributeName: link_url,
+                },
+            )
+        )
+        rendered_at += len(_LINK_ARROW)
+        last_end = url_end
+
+    if last_end < len(text):
+        chunk = text[last_end:]
+        result.appendAttributedString_(
+            NSAttributedString.alloc().initWithString_attributes_(
+                chunk,
+                plain_attributes,
+            )
+        )
+        chunk_start = rendered_at
+        rendered_at += len(chunk)
+        segments.append(
+            (chunk_start, rendered_at, md_start + last_end, md_start + len(text))
+        )
+    return result, segments
+
+
 class MarkdownRenderer:
     """Render Markdown into one NSAttributedString and track interactive blocks."""
 
     def __init__(self) -> None:
-        self._parser = MarkdownIt().enable("table")
+        self._parser = (
+            MarkdownIt().enable("table").use(dollarmath_plugin, allow_digits=True)
+        )
         self._blocks: dict[str, str] = {}
         self._expanded: set[str] = set()
         self.block_ranges: list[tuple[str, int, int]] = []
+        self._source_markdown = ""
+        self._source_map: list[tuple[int, int, int, int]] = []
 
-    def render(self, text: str, color) -> NSMutableAttributedString:
-        tokens = self._parser.parse(text.rstrip())
+    def markdown_for_selection(self, char_range: tuple[int, int]) -> str:
+        start, length = char_range
+        if length <= 0:
+            return ""
+        end = start + length
+        parts: list[tuple[int, str]] = []
+        for rendered_start, rendered_end, md_start, md_end in self._source_map:
+            if rendered_end <= start or rendered_start >= end:
+                continue
+            overlap_start = max(rendered_start, start)
+            overlap_end = min(rendered_end, end)
+            rendered_span = rendered_end - rendered_start
+            md_span = md_end - md_start
+            if rendered_span <= 0 or md_span <= 0:
+                continue
+            start_num = overlap_start - rendered_start
+            end_num = overlap_end - rendered_start
+            slice_start = md_start + (md_span * start_num) // rendered_span
+            slice_end = md_start + (md_span * end_num) // rendered_span
+            parts.append((overlap_start, self._source_markdown[slice_start:slice_end]))
+        if not parts:
+            return ""
+        parts.sort(key=lambda item: item[0])
+        return "".join(text for _, text in parts)
+
+    def render(
+        self,
+        text: str,
+        color,
+        *,
+        math_cache: dict[MathCacheKey, MathBitmap] | None = None,
+        scale_factor: float | None = None,
+    ) -> NSMutableAttributedString:
+        source = text.rstrip()
+        self._source_markdown = source
+        self._source_map = []
+        cache = math_cache if math_cache is not None else {}
+        backing_scale = scale_factor if scale_factor is not None else _backing_scale()
+        tokens = self._parser.parse(source)
         self._blocks = {}
         self.block_ranges = []
-        blocks = []
+        blocks: list[tuple[str, object, str | None, list]] = []
 
         i = 0
         while i < len(tokens):
             token = tokens[i]
 
             if token.type in {"bullet_list_open", "ordered_list_open"}:
-                list_text, i = self._render_list(tokens, i, color)
-                blocks.append((token.type, list_text, None))
+                list_text, list_segments, i = self._render_list(
+                    tokens, i, color, math_cache=cache, scale_factor=backing_scale
+                )
+                blocks.append((token.type, list_text, None, list_segments))
+                continue
+
+            if token.type in {"math_block", "math_block_label"}:
+                block, segments = self._render_math_block(
+                    token, color, math_cache=cache, scale_factor=backing_scale
+                )
+                blocks.append((token.type, block, None, segments))
+                i += 1
                 continue
 
             if token.type in {"fence", "code_block"}:
@@ -264,7 +466,7 @@ class MarkdownRenderer:
                             style=_paragraph_style(),
                         )
                     )
-                    blocks.append(("status", block, None))
+                    blocks.append(("status", block, None, []))
                     i += 1
                     continue
                 block_id = self._append_collapsible_block(
@@ -273,7 +475,8 @@ class MarkdownRenderer:
                     color,
                     monospace=True,
                 )
-                blocks.append((token.type, block, block_id))
+                segments = self._fence_segments(token, block.length())
+                blocks.append((token.type, block, block_id, segments))
                 i += 1
                 continue
 
@@ -291,13 +494,13 @@ class MarkdownRenderer:
                     color.colorWithAlphaComponent_(0.75),
                     monospace=False,
                 )
-                blocks.append((token.type, block, block_id))
+                blocks.append((token.type, block, block_id, []))
                 i += 1
                 continue
 
             if token.type == "table_open":
                 block, i = self._render_table(tokens, i, color)
-                blocks.append((token.type, block, None))
+                blocks.append((token.type, block, None, []))
                 continue
 
             if token.type in {"heading_open", "paragraph_open"}:
@@ -310,6 +513,7 @@ class MarkdownRenderer:
                 if token.type == "heading_open" and token.tag[1:].isdigit():
                     heading_level = int(token.tag[1:])
                 block = NSMutableAttributedString.alloc().init()
+                segments: list[tuple[int, int, int, int]] = []
                 i += 1
                 while i < len(tokens) and tokens[i].type != close_type:
                     if tokens[i].type == "inline":
@@ -320,12 +524,26 @@ class MarkdownRenderer:
                                 FONT_SIZE,
                             )
                             font = NSFont.boldSystemFontOfSize_(size)
-                        block.appendAttributedString_(
-                            self._render_inline(
-                                tokens[i].children or [],
-                                color,
-                                base_font=font,
-                            )
+                        inline_token = tokens[i]
+                        inline_content = inline_token.content or ""
+                        inline_md_start = _md_line_start(
+                            source,
+                            inline_token.map[0] if inline_token.map else 0,
+                        )
+                        inline_block, inline_segments = self._render_inline(
+                            inline_token.children or [],
+                            color,
+                            base_font=font,
+                            inline_content=inline_content,
+                            inline_md_start=inline_md_start,
+                            math_cache=cache,
+                            scale_factor=backing_scale,
+                        )
+                        offset = block.length()
+                        block.appendAttributedString_(inline_block)
+                        segments.extend(
+                            (offset + r0, offset + r1, m0, m1)
+                            for r0, r1, m0, m1 in inline_segments
                         )
                     i += 1
                 if block.length():
@@ -339,14 +557,14 @@ class MarkdownRenderer:
                         _paragraph_style(line_height=line_height),
                         (0, block.length()),
                     )
-                blocks.append((token.type, block, None))
+                blocks.append((token.type, block, None, segments))
                 i += 1
                 continue
 
             i += 1
 
         result = NSMutableAttributedString.alloc().init()
-        for index, (token_type, block, block_id) in enumerate(blocks):
+        for index, (token_type, block, block_id, segments) in enumerate(blocks):
             previous_type = blocks[index - 1][0] if index else None
             next_type = blocks[index + 1][0] if index + 1 < len(blocks) else None
             _apply_block_margins(
@@ -358,15 +576,65 @@ class MarkdownRenderer:
                 result.appendAttributedString_(
                     NSAttributedString.alloc().initWithString_("\n")
                 )
-            start = result.length()
+            base = result.length()
             result.appendAttributedString_(block)
+            for rendered_start, rendered_end, md_start, md_end in segments:
+                self._source_map.append(
+                    (base + rendered_start, base + rendered_end, md_start, md_end)
+                )
             if block_id is not None:
-                self.block_ranges.append((block_id, start, block.length()))
+                self.block_ranges.append((block_id, base, block.length()))
 
         return result
 
     def block_content(self, block_id: str) -> str | None:
         return self._blocks.get(block_id)
+
+    def _fence_segments(self, token, rendered_length: int):
+        if not token.map or rendered_length <= 0:
+            return []
+        md_start, md_end = _md_line_range(
+            self._source_markdown,
+            token.map[0],
+            token.map[1],
+        )
+        content = (token.content or "").rstrip("\n")
+        fence_start = self._source_markdown.find(content, md_start, md_end)
+        if fence_start == -1:
+            return [(0, rendered_length, md_start, md_end)]
+        ui_end = min(rendered_length, len(content))
+        return [(0, ui_end, fence_start, fence_start + ui_end)]
+
+    def _render_math_block(self, token, color, *, math_cache, scale_factor):
+        md_start, md_end = _md_line_range(
+            self._source_markdown,
+            token.map[0],
+            token.map[1],
+        )
+        latex = (token.content or "").strip()
+        block = NSMutableAttributedString.alloc().init()
+        rendered_start = block.length()
+        _, _, bitmap = _append_math_attachment(
+            block,
+            latex,
+            inline=False,
+            color=color,
+            font_size=FONT_SIZE,
+            math_cache=math_cache,
+            scale_factor=scale_factor,
+        )
+        line_height = _math_line_height(bitmap)
+        style = NSMutableParagraphStyle.alloc().init()
+        style.setAlignment_(NSTextAlignmentCenter)
+        style.setMinimumLineHeight_(line_height)
+        style.setMaximumLineHeight_(line_height)
+        block.addAttribute_value_range_(
+            NSParagraphStyleAttributeName,
+            style,
+            (0, block.length()),
+        )
+        segments = [(rendered_start, block.length(), md_start, md_end)]
+        return block, segments
 
     def toggle_block(self, block_id: str) -> None:
         if block_id in self._expanded:
@@ -402,9 +670,12 @@ class MarkdownRenderer:
             style.setParagraphSpacing_(LIST_ITEM_SPACING)
         return style
 
-    def _render_list(self, tokens, start: int, color, depth: int = 0):
+    def _render_list(
+        self, tokens, start: int, color, depth: int = 0, *, math_cache, scale_factor
+    ):
         font = NSFont.systemFontOfSize_(FONT_SIZE)
         result = NSMutableAttributedString.alloc().init()
+        segments: list[tuple[int, int, int, int]] = []
         ordered = tokens[start].type == "ordered_list_open"
         close_type = (
             "ordered_list_close" if ordered else "bullet_list_close"
@@ -437,11 +708,13 @@ class MarkdownRenderer:
             )
             first_item = False
             item_line = NSMutableAttributedString.alloc().init()
+            item_segments: list[tuple[int, int, int, int]] = []
             prefix = f"{item_number}.\t" if ordered else "•\t"
             item_line.appendAttributedString_(
                 _attributed(prefix, color=color, font=font)
             )
             nested = NSMutableAttributedString.alloc().init()
+            nested_segments: list[tuple[int, int, int, int]] = []
 
             while i < len(tokens) and tokens[i].type != "list_item_close":
                 if tokens[i].type == "paragraph_open":
@@ -451,12 +724,26 @@ class MarkdownRenderer:
                         and tokens[i].type != "paragraph_close"
                     ):
                         if tokens[i].type == "inline":
-                            item_line.appendAttributedString_(
-                                self._render_inline(
-                                    tokens[i].children or [],
-                                    color,
-                                    base_font=font,
-                                )
+                            inline_token = tokens[i]
+                            inline_content = inline_token.content or ""
+                            inline_md_start = _md_line_start(
+                                self._source_markdown,
+                                inline_token.map[0] if inline_token.map else 0,
+                            )
+                            inline_block, inline_segments = self._render_inline(
+                                inline_token.children or [],
+                                color,
+                                base_font=font,
+                                inline_content=inline_content,
+                                inline_md_start=inline_md_start,
+                                math_cache=math_cache,
+                                scale_factor=scale_factor,
+                            )
+                            offset = item_line.length()
+                            item_line.appendAttributedString_(inline_block)
+                            item_segments.extend(
+                                (offset + r0, offset + r1, m0, m1)
+                                for r0, r1, m0, m1 in inline_segments
                             )
                         i += 1
                     i += 1
@@ -464,11 +751,13 @@ class MarkdownRenderer:
                     "bullet_list_open",
                     "ordered_list_open",
                 }:
-                    nested_list, i = self._render_list(
+                    nested_list, nested_segments, i = self._render_list(
                         tokens,
                         i,
                         color,
                         depth + 1,
+                        math_cache=math_cache,
+                        scale_factor=scale_factor,
                     )
                     nested.appendAttributedString_(
                         NSAttributedString.alloc().initWithString_("\n")
@@ -483,17 +772,38 @@ class MarkdownRenderer:
                 style,
                 (0, item_line.length()),
             )
+            base = result.length()
             result.appendAttributedString_(item_line)
+            segments.extend(
+                (base + r0, base + r1, m0, m1) for r0, r1, m0, m1 in item_segments
+            )
             if nested.length() > 0:
+                nested_base = result.length()
                 result.appendAttributedString_(nested)
+                segments.extend(
+                    (nested_base + r0, nested_base + r1, m0, m1)
+                    for r0, r1, m0, m1 in nested_segments
+                )
 
-        return result, i + 1
+        return result, segments, i + 1
 
-    def _render_inline(self, children, color, base_font=None):
+    def _render_inline(
+        self,
+        children,
+        color,
+        base_font=None,
+        *,
+        inline_content: str = "",
+        inline_md_start: int = 0,
+        math_cache,
+        scale_factor,
+    ):
         result = NSMutableAttributedString.alloc().init()
+        segments: list[tuple[int, int, int, int]] = []
         font = base_font or NSFont.systemFontOfSize_(FONT_SIZE)
         bold_font = NSFont.boldSystemFontOfSize_(font.pointSize())
         bold = False
+        cursor = 0
         index = 0
         while index < len(children):
             child = children[index]
@@ -508,20 +818,27 @@ class MarkdownRenderer:
             if child.type == "link_open":
                 href = child.attrGet("href") or ""
                 link_result = NSMutableAttributedString.alloc().init()
+                link_text = ""
                 index += 1
                 while (
                     index < len(children)
                     and children[index].type != "link_close"
                 ):
+                    piece = children[index].content or ""
+                    link_text += piece
                     link_result.appendAttributedString_(
                         _attributed(
-                            children[index].content or "",
+                            piece,
                             color=_LINK_COLOR,
                             font=font,
                         )
                     )
                     index += 1
                 if link_result.length():
+                    pos = inline_content.find(link_text, cursor) if link_text else cursor
+                    if pos == -1:
+                        pos = cursor
+                    md_start = inline_md_start + pos
                     link_url = NSURL.URLWithString_(href)
                     text_length = link_result.length()
                     link_result.addAttribute_value_range_(
@@ -547,13 +864,46 @@ class MarkdownRenderer:
                             link=link_url,
                         )
                     )
+                    offset = result.length()
                     result.appendAttributedString_(link_result)
+                    segments.append(
+                        (
+                            offset,
+                            offset + text_length,
+                            md_start,
+                            md_start + len(link_text),
+                        )
+                    )
+                    cursor = pos + len(link_text)
                 index += 1
                 continue
             if child.type == "softbreak":
                 result.appendAttributedString_(
                     _attributed("\n", color=color, font=font)
                 )
+                index += 1
+                continue
+            if child.type == "math_inline":
+                latex = child.content or ""
+                markup = child.markup or "$"
+                source = _math_inline_source(inline_content, latex, markup)
+                pos = inline_content.find(source, cursor)
+                if pos == -1:
+                    pos = cursor
+                md_start = inline_md_start + pos
+                md_end = md_start + len(source)
+                rendered_start = result.length()
+                _append_math_attachment(
+                    result,
+                    latex,
+                    inline=True,
+                    color=color,
+                    font_size=font.pointSize(),
+                    math_cache=math_cache,
+                    scale_factor=scale_factor,
+                )
+                segments.append((rendered_start, result.length(), md_start, md_end))
+                cursor = pos + len(source)
                 index += 1
                 continue
 
@@ -570,11 +920,25 @@ class MarkdownRenderer:
                 current_font = bold_font
             else:
                 current_font = font
-            result.appendAttributedString_(
-                _linkify_text(content, color, current_font)
+            pos = inline_content.find(content, cursor)
+            if pos == -1:
+                pos = cursor
+            md_start = inline_md_start + pos
+            piece, piece_segments = _linkify_text_mapped(
+                content,
+                color,
+                current_font,
+                md_start,
             )
+            offset = result.length()
+            result.appendAttributedString_(piece)
+            segments.extend(
+                (offset + r0, offset + r1, m0, m1)
+                for r0, r1, m0, m1 in piece_segments
+            )
+            cursor = pos + len(content)
             index += 1
-        return result
+        return result, segments
 
     def _append_collapsible_block(
         self,

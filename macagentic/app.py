@@ -48,7 +48,7 @@ class MacAgenticApp:
         self.screenshot_path = screenshot_path
         self.next_agent_id = 1
 
-    def create_agent(self) -> Agent:
+    def create_agent(self, *, render_markdown: bool = False) -> Agent:
         agent = Agent(
             self.next_agent_id,
             model_name=self.model_name,
@@ -56,6 +56,7 @@ class MacAgenticApp:
             tool_instructions=self.tool_instructions,
             skill_catalog=self.skill_catalog,
             user_mounts=self.user_mounts,
+            render_markdown=render_markdown,
         )
         self.next_agent_id += 1
         return agent

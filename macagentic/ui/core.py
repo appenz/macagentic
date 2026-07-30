@@ -52,6 +52,7 @@ from macagentic.agent import Agent
 from macagentic.app import app
 from macagentic.history import save_history
 from macagentic.ui.helpers import request_fast_text
+from macagentic.ui.math_render import MathBitmap, MathCacheKey
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
 from macagentic.ui.projection import (
     display_model_name,
@@ -147,6 +148,21 @@ class ConversationTextView(NSTextView):
             self.ui.exit_block_focus()
             return
         objc.super(ConversationTextView, self).keyDown_(event)
+
+    def copy_(self, _sender):
+        if self.ui is None or self.ui.renderer is None:
+            objc.super(ConversationTextView, self).copy_(None)
+            return
+        selected = self.selectedRange()
+        if selected.length == 0:
+            objc.super(ConversationTextView, self).copy_(None)
+            return
+        markdown = self.ui.renderer.markdown_for_selection(
+            (selected.location, selected.length)
+        )
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.declareTypes_owner_([NSStringPboardType], None)
+        pasteboard.setString_forType_(markdown, NSStringPboardType)
 
 
 class InputDelegate(NSObject):
@@ -289,6 +305,7 @@ class UITab:
     input_text: str = ""
     tool_call_descriptions: dict[str, str] = field(default_factory=dict)
     log_render_index: int = 0
+    math_cache: dict[MathCacheKey, MathBitmap] = field(default_factory=dict)
 
     # Execution
     thread: threading.Thread | None = None
@@ -337,6 +354,8 @@ class MacAgenticUI:
         self.active_index = 0
         self.focused_block = -1
         self.update_queue: queue.Queue[UIUpdate] = queue.Queue()
+        self._rendering = False
+        self._render_pending = False
 
         self.bridge = MainThreadBridge.alloc().init()
         self.bridge.ui = self
@@ -381,7 +400,7 @@ class MacAgenticUI:
 
     def new_tab(self) -> None:
         self._save_input()
-        agent = app.create_agent()
+        agent = app.create_agent(render_markdown=True)
         agent.ui = self
         self.tabs.append(UITab(id=agent.id, agent=agent))
         self.active_index = len(self.tabs) - 1
@@ -399,7 +418,7 @@ class MacAgenticUI:
         )
         self.tabs.pop(index)
         if not self.tabs:
-            agent = app.create_agent()
+            agent = app.create_agent(render_markdown=True)
             agent.ui = self
             self.tabs.append(UITab(id=agent.id, agent=agent))
             self.active_index = 0
@@ -576,7 +595,32 @@ class MacAgenticUI:
     def _tab_with_id(self, tab_id: int) -> UITab | None:
         return next((tab for tab in self.tabs if tab.id == tab_id), None)
 
+    def _window_backing_scale(self) -> float:
+        if self.window is not None:
+            screen = self.window.screen()
+            if screen is not None:
+                return float(screen.backingScaleFactor())
+        screen = NSScreen.mainScreen()
+        if screen is None:
+            return 2.0
+        return max(float(screen.backingScaleFactor()), 2.0)
+
     def _render_window(self) -> None:
+        if not self.tabs:
+            return
+        if self._rendering:
+            self._render_pending = True
+            return
+        self._rendering = True
+        try:
+            self._render_window_body()
+        finally:
+            self._rendering = False
+            if self._render_pending:
+                self._render_pending = False
+                self._render_window()
+
+    def _render_window_body(self) -> None:
         if not self.tabs:
             return
         draft = self._current_input()
@@ -588,7 +632,12 @@ class MacAgenticUI:
             tool_call_descriptions=self.active_tab.tool_call_descriptions,
             show_tool_output=app.show_tool_output,
         )
-        rendered = self.renderer.render(transcript, NSColor.darkGrayColor())
+        rendered = self.renderer.render(
+            transcript,
+            NSColor.darkGrayColor(),
+            math_cache=self.active_tab.math_cache,
+            scale_factor=self._window_backing_scale(),
+        )
         content_height = self._measure(rendered)
         screen = NSScreen.mainScreen().frame().size
         has_content = bool(transcript)

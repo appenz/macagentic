@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from collections.abc import Mapping
 from copy import deepcopy
@@ -26,9 +27,29 @@ TOOLS_PLACEHOLDER = "{{TOOLS}}"
 SKILLS_PLACEHOLDER = "{{SKILLS}}"
 FILESYSTEM_PLACEHOLDER = "{{FILESYSTEM}}"
 
+_RENDER_MARKDOWN_IF = re.compile(
+    r"\{\{#if render_markdown\}\}\s*(.*?)\s*"
+    r"(?:\{\{else\}\}\s*(.*?)\s*)?"
+    r"\{\{/if\}\}",
+    re.DOTALL,
+)
+
 
 class UI(Protocol):
     def update(self) -> None: ...
+
+
+def _apply_prompt_conditionals(
+    prompt: str,
+    *,
+    render_markdown: bool,
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        if_block = match.group(1)
+        else_block = match.group(2) or ""
+        return if_block if render_markdown else else_block
+
+    return _RENDER_MARKDOWN_IF.sub(replace, prompt)
 
 
 def load_system_prompt(
@@ -36,8 +57,13 @@ def load_system_prompt(
     tool_instructions: str | None = None,
     skill_catalog: SkillCatalog | None = None,
     filesystem_instructions: str | None = None,
+    *,
+    render_markdown: bool = False,
 ) -> str:
-    prompt = DEFAULT_PROMPT_PATH.read_text()
+    prompt = _apply_prompt_conditionals(
+        DEFAULT_PROMPT_PATH.read_text(),
+        render_markdown=render_markdown,
+    )
     missing = [
         name
         for name, placeholder in (
@@ -100,6 +126,7 @@ class Agent:
         skill_catalog: SkillCatalog | None = None,
         user_mounts: Mapping[str, str] | None = None,
         roots_directory: Path | None = None,
+        render_markdown: bool = False,
     ) -> None:
         self.id = agent_id
         self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
@@ -141,6 +168,7 @@ class Agent:
                     tool_instructions,
                     self.skill_catalog,
                     render_filesystem_instructions(mounts),
+                    render_markdown=render_markdown,
                 ),
             }
         )

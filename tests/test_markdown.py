@@ -1,3 +1,4 @@
+from AppKit import NSBitmapImageRep, NSPNGFileType
 from Cocoa import (
     NSColor,
     NSFontAttributeName,
@@ -6,7 +7,13 @@ from Cocoa import (
     NSParagraphStyleAttributeName,
 )
 from Foundation import NSString
+from unittest.mock import patch
 
+from macagentic.ui.math_render import (
+    MathRenderError,
+    lookup_or_render_math_bitmap,
+    render_latex_to_bitmap,
+)
 from macagentic.ui.markdown import (
     BLOCK_GAP,
     CODE_FONT_SIZE,
@@ -226,3 +233,94 @@ def test_markdown_links_and_table_alignment() -> None:
 
     assert str(links.string()).count(" ↗") == 2
     assert "A           2\nLonger     10" in str(table.string())
+
+
+def test_markdown_renders_inline_and_block_math() -> None:
+    renderer = MarkdownRenderer()
+    cache = {}
+    source = "Energy $E=mc^2$ here\n\n$$\n24 \\times 576\n$$\n"
+    rendered = renderer.render(source, NSColor.blackColor(), math_cache=cache)
+    text = str(rendered.string())
+
+    assert "\ufffc" in text
+    assert "$E=mc^2$" not in text
+    assert "24 \\times 576" not in text
+    assert len(cache) == 2
+
+
+def test_math_cache_reuses_bitmaps() -> None:
+    cache = {}
+    renderer = MarkdownRenderer()
+    source = "Again $x^2$ and $x^2$"
+
+    renderer.render(source, NSColor.blackColor(), math_cache=cache)
+    assert len(cache) == 1
+
+    first = next(iter(cache.values()))
+    renderer.render(source, NSColor.blackColor(), math_cache=cache)
+    assert next(iter(cache.values())) is first
+
+
+def test_display_math_uses_tall_line_height() -> None:
+    renderer = MarkdownRenderer()
+    latex = r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}"
+    source = f"$$\n{latex}\n$$"
+    rendered = renderer.render(source, NSColor.blackColor(), math_cache={})
+    style = _style_at(rendered, "\ufffc")
+    assert style.minimumLineHeight() > LINE_HEIGHT
+    assert style.minimumLineHeight() >= 35.0
+
+
+def test_render_latex_to_bitmap_produces_png() -> None:
+    bitmap = render_latex_to_bitmap(
+        r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}",
+        inline=False,
+        color=NSColor.blackColor(),
+        font_size=14.0,
+        scale_factor=2.0,
+    )
+    assert bitmap is not None
+    rep = NSBitmapImageRep.alloc().initWithData_(bitmap.image.TIFFRepresentation())
+    assert rep is not None
+    png = rep.representationUsingType_properties_(NSPNGFileType, None)
+    assert png is not None
+    assert len(bytes(png)) > 1000
+
+
+def test_markdown_math_render_failure_raises() -> None:
+    renderer = MarkdownRenderer()
+    with patch(
+        "macagentic.ui.markdown.lookup_or_render_math_bitmap",
+        side_effect=MathRenderError("bad math"),
+    ):
+        try:
+            renderer.render(
+                "Bad $x^2$ math",
+                NSColor.blackColor(),
+                math_cache={},
+            )
+        except MathRenderError:
+            return
+    raise AssertionError("expected MathRenderError")
+
+
+def test_markdown_for_selection_preserves_math_markdown() -> None:
+    renderer = MarkdownRenderer()
+    cache = {}
+    source = "Before $x^2$ after"
+    rendered = renderer.render(
+        source,
+        NSColor.blackColor(),
+        math_cache=cache,
+    )
+    text = str(rendered.string())
+    math_index = text.index("\ufffc")
+
+    copied = renderer.markdown_for_selection((0, len(text)))
+    assert copied == source
+
+    copied_math = renderer.markdown_for_selection((math_index, 1))
+    assert copied_math == "$x^2$"
+
+    copied_mixed = renderer.markdown_for_selection((0, math_index + 1))
+    assert copied_mixed == "Before $x^2$"

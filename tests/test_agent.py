@@ -136,7 +136,30 @@ def test_default_prompt_has_all_placeholders_replaced() -> None:
     assert "{{TOOLS}}" not in prompt
     assert "{{SKILLS}}" not in prompt
     assert "{{FILESYSTEM}}" not in prompt
-    assert "the agent returns to the user" in prompt
+    assert "{{#if render_markdown}}" not in prompt
+    assert "plain text" in prompt
+    assert "Final responses should be in Markdown." not in prompt
+
+
+def test_markdown_prompt_is_used_for_cocoa_agents(tmp_path: Path) -> None:
+    prompt = load_system_prompt(render_markdown=True)
+
+    assert "Final responses should be in Markdown." in prompt
+    assert "$...$" in prompt
+
+    agent = make_agent(tmp_path, render_markdown=True)
+    assert "Final responses should be in Markdown." in (
+        agent.messages[0]["content"]
+    )
+
+
+def test_plain_prompt_is_used_for_cli_agents(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path)
+
+    assert "plain text" in agent.messages[0]["content"]
+    assert "Final responses should be in Markdown." not in (
+        agent.messages[0]["content"]
+    )
 
 
 def test_custom_and_tool_instructions_are_inserted() -> None:

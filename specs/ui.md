@@ -75,6 +75,7 @@ class UITab:
     input_text: str = ""
     tool_call_descriptions: dict[str, str] = field(default_factory=dict)
     log_render_index: int = 0
+    math_cache: dict = field(default_factory=dict)
 
     # Execution
     thread: threading.Thread | None = None
@@ -191,6 +192,7 @@ order in which descriptions finish.
 - `macagentic/ui/cli.py`: `CommandLineUI` and batch CLI runner.
 - `macagentic/ui/core.py`: `MacAgenticUI`, Cocoa window, tabs, and rendering orchestration.
 - `macagentic/ui/markdown.py`: Native Cocoa Markdown renderer.
+- `macagentic/ui/math_render.py`: LaTeX math bitmap rendering (see `specs/math_rendering.md`).
 - `macagentic/ui/projection.py`: Terminal conversation-log projection and usage formatting.
 - `macagentic/ui/updates.py`: Immutable UI update events.
 - `macagentic/ui/helpers/fast_llm.py`: Asynchronous fast-model helper for titles and descriptions.

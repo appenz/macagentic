@@ -7,9 +7,11 @@ requires-python = ">=3.13"
 dependencies = [
     "litellm>=1.75.5,<1.92",
     "markdown-it-py>=4.2.0",
+    "mdit-py-plugins>=0.6.1",
     "mini-swe-agent",
     "pyobjc>=12.2.1",
     "quickmachotkey>=2025.7.28",
+    "ziamath>=0.13",
 ]
 
 [dependency-groups]
