@@ -20,6 +20,7 @@ from macagentic.agent.model import ResponseModel
 from macagentic.agent.shell import ShellEnvironment
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.usage import UsageTracker
+from macagentic.config import DEFAULT_MODELS, MODEL_TIERS
 
 DEFAULT_PROMPT_PATH = Path(__file__).parent / "prompts" / "default.md"
 CUSTOM_INSTRUCTIONS_PLACEHOLDER = "{{CUSTOM_INSTRUCTIONS}}"
@@ -33,6 +34,20 @@ _RENDER_MARKDOWN_IF = re.compile(
     r"\{\{/if\}\}",
     re.DOTALL,
 )
+_MODEL_TIER_PATTERN = re.compile(
+    r"(?<!\S)/(?P<tier>fast|medium|slow)(?!\S)"
+)
+
+
+def extract_model_tier(text: str) -> tuple[str | None, str]:
+    """Strip /fast|/medium|/slow tokens; return (last tier, remainder)."""
+    matches = list(_MODEL_TIER_PATTERN.finditer(text))
+    if not matches:
+        return None, text
+    tier = matches[-1].group("tier")
+    remainder = _MODEL_TIER_PATTERN.sub(" ", text)
+    remainder = re.sub(r"\s+", " ", remainder).strip()
+    return tier, remainder
 
 
 class UI(Protocol):
@@ -101,6 +116,7 @@ class Agent:
     id: int
     root: Path
     model: ResponseModel
+    model_presets: dict[str, str]
     tool_runner: ShellEnvironment
     skill_catalog: SkillCatalog
 
@@ -127,11 +143,16 @@ class Agent:
         user_mounts: Mapping[str, str] | None = None,
         roots_directory: Path | None = None,
         render_markdown: bool = False,
+        model_presets: Mapping[str, str] | None = None,
         messages: list[dict] | None = None,
         conversation_log: ConversationLog | None = None,
     ) -> None:
         self.id = agent_id
         self.skill_catalog = skill_catalog or EMPTY_SKILL_CATALOG
+        self.model_presets = {
+            tier: str((model_presets or DEFAULT_MODELS).get(tier, DEFAULT_MODELS[tier]))
+            for tier in MODEL_TIERS
+        }
         mounts = dict(user_mounts or {})
         self.root = create_agent_root(
             self.id,
@@ -152,7 +173,7 @@ class Agent:
             (Path(package_dir) / "config" / "mini.yaml").read_text()
         )
         selected_model = model_name or os.getenv(
-            "MSWEA_MODEL_NAME", "openai/gpt-5-mini"
+            "MSWEA_MODEL_NAME", DEFAULT_MODELS["medium"]
         )
         self.model = ResponseModel(
             **(config["model"] | {"model_name": selected_model})
@@ -190,8 +211,28 @@ class Agent:
         if self.ui is not None:
             self.ui.update()
 
+    def set_model(self, model_name: str) -> None:
+        self.model.config.model_name = model_name
+        self.update_ui()
+
+    def set_model_tier(self, tier: str) -> None:
+        if tier not in self.model_presets:
+            raise ValueError(f"Unknown model tier: {tier}")
+        self.set_model(self.model_presets[tier])
+
     def run_turn(self, request: str) -> None:
         request = request.strip()
+        if not request:
+            return
+
+        tier, request = extract_model_tier(request)
+        if tier is not None:
+            self.set_model_tier(tier)
+            self.conversation_log.append(
+                "model_switch",
+                {"model": self.model_name},
+            )
+            self.update_ui()
         if not request:
             return
 

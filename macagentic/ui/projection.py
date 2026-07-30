@@ -39,6 +39,9 @@ def render_conversation(
             )
         elif event.kind == "interrupted":
             parts.append("Interrupted.\n\n")
+        elif event.kind == "model_switch":
+            model = display_model_name(str(event.payload.get("model", "")))
+            parts.append(f"Switching to {model}\n\n")
     return "".join(parts)
 
 

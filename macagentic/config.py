@@ -5,6 +5,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+MODEL_TIERS = ("fast", "medium", "slow")
+DEFAULT_MODELS = {
+    "fast": "openai/gpt-5.6-luna",
+    "medium": "openai/gpt-5.6-terra",
+    "slow": "openai/gpt-5.6-sol",
+}
+DEFAULT_MODEL = DEFAULT_MODELS["medium"]
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -36,11 +44,32 @@ def _deep_merge(
 
 @dataclass(frozen=True)
 class MacAgenticConfig:
-    model: str = "openai/gpt-5-mini"
+    model: str = DEFAULT_MODEL
+    models: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_MODELS)
+    )
     openai_api_key: str = ""
     brave_api_key: str = ""
     custom_prompt: str = ""
     mounts: dict[str, str] = field(default_factory=dict)
+
+
+def _parse_models(data: dict[str, Any]) -> dict[str, str]:
+    models = dict(DEFAULT_MODELS)
+    raw = data.get("models", {})
+    if raw == {} or raw is None:
+        return models
+    if not isinstance(raw, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in raw.items()
+    ):
+        raise ValueError(
+            "Config 'models' must map tier names to model strings."
+        )
+    for tier in MODEL_TIERS:
+        if tier in raw:
+            models[tier] = str(raw[tier] or "")
+    return models
 
 
 def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
@@ -51,7 +80,8 @@ def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
     ):
         raise ValueError("Config 'mounts' must map names to directory paths.")
     return MacAgenticConfig(
-        model=str(data.get("model", "openai/gpt-5-mini") or ""),
+        model=str(data.get("model", DEFAULT_MODEL) or DEFAULT_MODEL),
+        models=_parse_models(data),
         openai_api_key=str(data.get("openai_api_key", "") or ""),
         brave_api_key=str(data.get("brave_api_key", "") or ""),
         custom_prompt=str(data.get("custom_prompt", "") or ""),

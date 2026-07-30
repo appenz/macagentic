@@ -32,7 +32,12 @@ def text_response(
 
 
 class FakeModel:
-    model_name = "openai/fake"
+    def __init__(self, model_name: str = "openai/fake") -> None:
+        self.config = SimpleNamespace(model_name=model_name)
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
 
     def query(self, _messages):
         return text_response("The answer is **2**.")
@@ -40,6 +45,7 @@ class FakeModel:
 
 class BlockingModel(FakeModel):
     def __init__(self) -> None:
+        super().__init__()
         self.started = threading.Event()
         self.release = threading.Event()
 
@@ -51,6 +57,7 @@ class BlockingModel(FakeModel):
 
 class ToolModel(FakeModel):
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
 
     def query(self, _messages):
@@ -255,6 +262,96 @@ def test_agent_copies_every_message_into_conversation_log(
         for event in agent.conversation_log.snapshot()
         if event.kind == "user_input"
     ] == [{"content": "What is 1+1?"}]
+
+
+def test_agent_switches_model_tier_from_slash_command(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(
+        tmp_path,
+        ui=None,
+        model_name="openai/gpt-5.6-terra",
+        model_presets={
+            "fast": "openai/gpt-5.6-luna",
+            "medium": "openai/gpt-5.6-terra",
+            "slow": "openai/gpt-5.6-sol",
+        },
+    )
+    agent.model = FakeModel("openai/gpt-5.6-terra")
+
+    agent.run_turn("/fast hello there")
+
+    assert agent.model_name == "openai/gpt-5.6-luna"
+    assert [
+        event.payload
+        for event in agent.conversation_log.snapshot()
+        if event.kind == "model_switch"
+    ] == [{"model": "openai/gpt-5.6-luna"}]
+    assert [
+        event.payload
+        for event in agent.conversation_log.snapshot()
+        if event.kind == "user_input"
+    ] == [{"content": "hello there"}]
+    assert agent.messages[-2]["content"] == "hello there"
+
+
+def test_agent_model_tier_only_does_not_query(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(
+        tmp_path,
+        ui=None,
+        model_presets={
+            "fast": "openai/gpt-5.6-luna",
+            "medium": "openai/gpt-5.6-terra",
+            "slow": "openai/gpt-5.6-sol",
+        },
+    )
+    model = FakeModel("openai/gpt-5.6-terra")
+    agent.model = model
+    calls = {"n": 0}
+    original_query = model.query
+
+    def counting_query(messages):
+        calls["n"] += 1
+        return original_query(messages)
+
+    model.query = counting_query  # type: ignore[method-assign]
+
+    agent.run_turn("/medium")
+
+    assert agent.model_name == "openai/gpt-5.6-terra"
+    assert calls["n"] == 0
+    assert not any(
+        event.kind == "user_input"
+        for event in agent.conversation_log.snapshot()
+    )
+    assert any(
+        event.kind == "model_switch"
+        for event in agent.conversation_log.snapshot()
+    )
+
+
+def test_set_model_tier_does_not_announce_or_create_user_turn(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(
+        tmp_path,
+        ui=None,
+        model_presets={
+            "fast": "openai/gpt-5.6-luna",
+            "medium": "openai/gpt-5.6-terra",
+            "slow": "openai/gpt-5.6-sol",
+        },
+    )
+    agent.model = FakeModel("openai/gpt-5.6-terra")
+
+    agent.set_model_tier("slow")
+
+    assert agent.model_name == "openai/gpt-5.6-sol"
+    kinds = [event.kind for event in agent.conversation_log.snapshot()]
+    assert "model_switch" not in kinds
+    assert "user_input" not in kinds
 
 
 def test_agent_expands_skills_only_in_model_messages(

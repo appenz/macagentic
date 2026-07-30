@@ -32,3 +32,4 @@ There are two user interfaces, cli and a Cocoa UI.
   - agent.ui.update() - Refresh the UI
   - ui → agent.run_turn(request) - Ask the agent to run this request
   - ui → agent.interrupt() - Ask the agent to stop
+  - ui → agent.set_model(model_name) / agent.set_model_tier(tier) - Change the agent model

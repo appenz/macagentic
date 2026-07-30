@@ -17,8 +17,10 @@ fields such as usage, cost, and model.
 ## Command Line
 
 `CommandLineUI` owns one `Agent` and all terminal interaction: the prompt loop,
-output projection, usage display, `/exit`, and signal handling. It creates the
-agent with `ui=self`; `update()` reads and prints new conversation-log entries.
+output projection, usage display, `/exit`, and signal handling. Model-tier
+slash commands (`/fast`, `/medium`, `/slow`) are handled inside `Agent.run_turn`
+and surface as `model_switch` conversation-log events. It creates the agent with
+`ui=self`; `update()` reads and prints new conversation-log entries.
 
 ```python
 class CommandLineUI:
@@ -48,7 +50,9 @@ tab.
 Application setup creates the first `Agent`, then creates `MacAgenticUI` with
 that agent. The UI assigns itself to `agent.ui` and places the agent in the
 first tab. New tabs create additional agents directly using the global
-configuration.
+configuration. Model selection is per tab via the Model menu (Cmd-1/2/3) or
+slash commands; menu and Cmd-1/2/3 call `agent.set_model_tier` on the active
+tab without appending a `model_switch` message.
 
 ## Cocoa Layout
 
@@ -151,10 +155,15 @@ class MacAgenticUI:
 
     def submit(self, request: str) -> None: ...
     def interrupt_active(self, replacement: str = "") -> None: ...
+    def set_active_model_tier(self, tier: str) -> None: ...
 
     def close_window(self) -> None: ...
     def hotkey_pressed(self) -> None: ...
 ```
+
+The Model menu lists Fast / Medium / Slow with configured model names and
+template icons from `macagentic/ui/assets/model_*.png`.
+
 
 `update()` may be called from any thread. It asks the bridge to schedule a
 main-thread update. UI workers call `post_update()` to append an immutable event

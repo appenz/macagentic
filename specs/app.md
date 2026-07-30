@@ -7,6 +7,7 @@ runtime configuration and creates identically configured agents.
 class MacAgenticApp:
     workspace: Path
     model_name: str | None
+    model_presets: dict[str, str]
     custom_instructions: str | None
     tool_instructions: str | None
     skill_catalog: SkillCatalog
@@ -28,6 +29,7 @@ class MacAgenticApp:
         user_mounts: dict[str, str],
         show_tool_output: bool,
         screenshot_path: Path | None = None,
+        model_presets: dict[str, str] | None = None,
     ) -> None: ...
 
     def create_agent(self) -> Agent: ...
@@ -38,3 +40,5 @@ app = MacAgenticApp()
 
 `create_agent()` assigns monotonically increasing integer IDs. Restored IDs
 resume the sequence, and existing `~/.tmpagent/<id>` roots are reused unchanged.
+New agents start with `model_name` from configuration; each agent may later
+switch models via its own `model_presets` without changing other tabs.

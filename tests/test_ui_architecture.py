@@ -51,6 +51,16 @@ def test_projection_renders_display_state_and_optional_tool_output() -> None:
     assert '"tool_call_id": "call-1"' in render_history(events)
 
 
+def test_projection_renders_model_switch() -> None:
+    events = (
+        ConversationEvent(
+            "model_switch",
+            {"model": "openai/gpt-5.6-luna"},
+        ),
+    )
+    assert render_conversation(events) == "Switching to gpt-5.6-luna\n\n"
+
+
 def test_projection_hides_system_and_user_message_copies() -> None:
     events = (
         ConversationEvent(
@@ -152,6 +162,11 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
     application.configure(
         workspace=Path("."),
         model_name="test-model",
+        model_presets={
+            "fast": "openai/fast",
+            "medium": "openai/medium",
+            "slow": "openai/slow",
+        },
         custom_instructions="custom",
         tool_instructions="tools",
         skill_catalog=EMPTY_SKILL_CATALOG,
@@ -171,6 +186,7 @@ def test_application_object_creates_configured_agents(monkeypatch) -> None:
     assert created[3][0] == 8
     assert created[2][1]["messages"] == [{"role": "user"}]
     assert kwargs["model_name"] == "test-model"
+    assert kwargs["model_presets"]["fast"] == "openai/fast"
     assert kwargs["custom_instructions"] == "custom"
     assert kwargs["tool_instructions"] == "tools"
     assert kwargs["user_mounts"] == {"notes": "~/notes"}

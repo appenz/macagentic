@@ -7,8 +7,9 @@ conversation, the agentic loop, tool execution, usage accounting, and
 cooperative interruption.
 
 `Agent` may hold an optional reference to the current UI, but may use it only
-to call `ui.update()`. The UI may call only `agent.run_turn(request)` and
-`agent.interrupt()`.
+to call `ui.update()`. The UI may call only `agent.run_turn(request)`,
+`agent.interrupt()`, `agent.set_model(model_name)`, and
+`agent.set_model_tier(tier)`.
 
 ## Agent Class
 
@@ -18,6 +19,7 @@ class Agent:
     id: int
     root: Path
     model: ResponseModel
+    model_presets: dict[str, str]
     tool_runner: ShellEnvironment
     skill_catalog: SkillCatalog
 
@@ -37,6 +39,10 @@ class Agent:
 
     def update_ui(self) -> None: ...
 
+    def set_model(self, model_name: str) -> None: ...
+
+    def set_model_tier(self, tier: str) -> None: ...
+
     def run_turn(self, request: str) -> None: ...
 
     def interrupt(self) -> None: ...
@@ -49,6 +55,7 @@ class Agent:
 - `id`: Process-local positive integer assigned by `MacAgenticApp`.
 - `root`: Clean working directory at `~/.tmpagent/<id>`.
 - `model`: mini-SWE-agent model adapter used for model calls and tool messages.
+- `model_presets`: Mapping of `fast` / `medium` / `slow` to LiteLLM model names.
 - `tool_runner`: Local shell-command executor used for tool calls and interruption.
 - `skill_catalog`: Immutable skill definitions used in the prompt and slash-command expansion.
 - `messages`: Ordered, structured context sent to the model.
@@ -76,8 +83,14 @@ remain relative to the agent root.
 
 ## Agent Loop
 
-User input → skill expansion → model call → tool execution → observation →
-repeat or return.
+User input → model-tier slash commands → skill expansion → model call → tool
+execution → observation → repeat or return.
+
+`/fast`, `/medium`, and `/slow` are stripped from user input like skill
+commands. The last matching tier overwrites the agent's model string using
+`model_presets`. A `model_switch` conversation-log event is appended only for
+these slash commands (not for Cocoa menu or keyboard shortcuts). If only tier
+commands remain, the turn returns without querying the model.
 
 ## Data Invariant
 

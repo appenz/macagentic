@@ -2,11 +2,13 @@ from pathlib import Path
 
 from macagentic.agent import Agent, ConversationLog
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
+from macagentic.config import DEFAULT_MODELS
 
 
 class MacAgenticApp:
     workspace: Path
     model_name: str | None
+    model_presets: dict[str, str]
     custom_instructions: str | None
     tool_instructions: str | None
     skill_catalog: SkillCatalog
@@ -18,6 +20,7 @@ class MacAgenticApp:
     def __init__(self) -> None:
         self.workspace = Path.cwd()
         self.model_name = None
+        self.model_presets = dict(DEFAULT_MODELS)
         self.custom_instructions = None
         self.tool_instructions = None
         self.skill_catalog = EMPTY_SKILL_CATALOG
@@ -37,9 +40,11 @@ class MacAgenticApp:
         user_mounts: dict[str, str],
         show_tool_output: bool,
         screenshot_path: Path | None = None,
+        model_presets: dict[str, str] | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.model_name = model_name
+        self.model_presets = dict(model_presets or DEFAULT_MODELS)
         self.custom_instructions = custom_instructions
         self.tool_instructions = tool_instructions
         self.skill_catalog = skill_catalog
@@ -62,6 +67,7 @@ class MacAgenticApp:
         agent = Agent(
             selected_id,
             model_name=self.model_name,
+            model_presets=self.model_presets,
             custom_instructions=self.custom_instructions,
             tool_instructions=self.tool_instructions,
             skill_catalog=self.skill_catalog,

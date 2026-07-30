@@ -28,6 +28,8 @@ from Cocoa import (
     NSMenuItem,
     NSNoBorder,
     NSObject,
+    NSOffState,
+    NSOnState,
     NSPanel,
     NSParagraphStyleAttributeName,
     NSPasteboard,
@@ -50,6 +52,7 @@ from quickmachotkey.constants import kVK_Space, optionKey
 
 from macagentic.agent import Agent
 from macagentic.app import app
+from macagentic.config import MODEL_TIERS
 from macagentic.history import save_history
 from macagentic.session import SavedSession, SavedTab, save_session as write_session
 from macagentic.ui.helpers import request_fast_text
@@ -69,6 +72,28 @@ from macagentic.ui.updates import (
 
 
 _hotkey_ui = None
+_ASSETS = Path(__file__).parent / "assets"
+_MODEL_TIER_KEYS = {"1": "fast", "2": "medium", "3": "slow"}
+_MODEL_TIER_LABELS = {
+    "fast": "Fast",
+    "medium": "Medium",
+    "slow": "Slow",
+}
+_MODEL_TIER_ICONS = {
+    "fast": "model_fast.png",
+    "medium": "model_medium.png",
+    "slow": "model_slow.png",
+}
+
+
+def _load_template_image(filename: str) -> NSImage:
+    image = NSImage.alloc().initByReferencingFile_(
+        str(_ASSETS / filename)
+    )
+    # 16pt is the standard NSMenuItem image size (matches menu text).
+    image.setSize_((16.0, 16.0))
+    image.setTemplate_(True)
+    return image
 
 
 @quickHotKey(virtualKey=kVK_Space, modifierMask=mask(optionKey))
@@ -111,6 +136,9 @@ class QuickPanel(NSPanel):
                 return True
             if key == "w" and self.ui is not None:
                 self.ui.close_tab(self.ui.active_index)
+                return True
+            if key in _MODEL_TIER_KEYS and self.ui is not None:
+                self.ui.set_active_model_tier(_MODEL_TIER_KEYS[key])
                 return True
         return objc.super(QuickPanel, self).performKeyEquivalent_(event)
 
@@ -234,6 +262,9 @@ class InputDelegate(NSObject):
                     if key == "w":
                         self.ui.close_tab(self.ui.active_index)
                         return True
+                    if key in _MODEL_TIER_KEYS:
+                        self.ui.set_active_model_tier(_MODEL_TIER_KEYS[key])
+                        return True
                 if flags & NSControlKeyMask and key == "c":
                     self.ui.interrupt_active()
                     return True
@@ -297,6 +328,12 @@ class AppDelegate(NSObject):
     def applicationWillTerminate_(self, _notification):
         if self.ui is not None:
             self.ui.save_session()
+
+    def selectModelTier_(self, sender):
+        if self.ui is None:
+            return
+        tier = str(sender.representedObject())
+        self.ui.set_active_model_tier(tier)
 
 
 @dataclass
@@ -374,11 +411,16 @@ class MacAgenticUI:
         self.bridge = MainThreadBridge.alloc().init()
         self.bridge.ui = self
         self.logo = NSImage.alloc().initByReferencingFile_(
-            str(Path(__file__).parent / "assets" / "llama.png")
+            str(_ASSETS / "llama.png")
         )
         self.dock_icon = NSImage.alloc().initByReferencingFile_(
-            str(Path(__file__).parent / "assets" / "icon.png")
+            str(_ASSETS / "icon.png")
         )
+        self.model_icons = {
+            tier: _load_template_image(filename)
+            for tier, filename in _MODEL_TIER_ICONS.items()
+        }
+        self.model_menu_items: dict[str, NSMenuItem] = {}
 
     @property
     def active_tab(self) -> UITab:
@@ -447,6 +489,12 @@ class MacAgenticUI:
         self.active_index = index
         self.focused_block = -1
         self._render_window()
+
+    def set_active_model_tier(self, tier: str) -> None:
+        self.active_tab.agent.set_model_tier(tier)
+        self._update_model_menu_state()
+        if self.window is not None:
+            self._render_window()
 
     def submit(self, request: str) -> None:
         request = request.strip()
@@ -645,6 +693,7 @@ class MacAgenticUI:
     def _render_window_body(self, *, activate: bool = False) -> None:
         if not self.tabs:
             return
+        self._update_model_menu_state()
         draft = self._current_input()
         if self.window is not None:
             self.active_tab.input_text = draft
@@ -1153,6 +1202,14 @@ class MacAgenticUI:
         if self.input_field is not None:
             self.input_field.setString_("")
 
+    def _update_model_menu_state(self) -> None:
+        current = self.active_tab.agent.model_name if self.tabs else ""
+        for tier, item in self.model_menu_items.items():
+            preset = app.model_presets.get(tier)
+            item.setState_(
+                NSOnState if preset == current else NSOffState
+            )
+
     def _install_menu(self) -> None:
         menu = NSMenu.alloc().init()
         app_item = NSMenuItem.alloc().init()
@@ -1195,6 +1252,29 @@ class MacAgenticUI:
             )
         edit_item.setSubmenu_(edit_menu)
         menu.addItem_(edit_item)
+
+        model_item = NSMenuItem.alloc().init()
+        model_menu = NSMenu.alloc().initWithTitle_("Model")
+        self.model_menu_items = {}
+        for index, tier in enumerate(MODEL_TIERS, start=1):
+            preset = app.model_presets.get(tier, "")
+            title = (
+                f"{_MODEL_TIER_LABELS[tier]} – "
+                f"{display_model_name(preset)}"
+            )
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title,
+                "selectModelTier:",
+                str(index),
+            )
+            item.setTarget_(self.app_delegate)
+            item.setRepresentedObject_(tier)
+            item.setImage_(self.model_icons[tier])
+            model_menu.addItem_(item)
+            self.model_menu_items[tier] = item
+        model_item.setSubmenu_(model_menu)
+        menu.addItem_(model_item)
+        self._update_model_menu_state()
         NSApplication.sharedApplication().setMainMenu_(menu)
 
 

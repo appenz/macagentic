@@ -95,6 +95,7 @@ def main() -> None:
     app.configure(
         workspace=Path.cwd(),
         model_name=model_name,
+        model_presets=config.models,
         custom_instructions=custom_instructions,
         tool_instructions=tool_instructions,
         skill_catalog=skill_catalog,
