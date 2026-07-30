@@ -1,3 +1,7 @@
+import pytest
+from unittest.mock import patch
+
+pytest.importorskip("Cocoa", reason="Cocoa renderer requires macOS")
 from AppKit import NSBitmapImageRep, NSPNGFileType
 from Cocoa import (
     NSColor,
@@ -7,7 +11,6 @@ from Cocoa import (
     NSParagraphStyleAttributeName,
 )
 from Foundation import NSString
-from unittest.mock import patch
 
 from macagentic.ui.math_render import (
     MathBitmapCache,

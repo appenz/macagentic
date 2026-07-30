@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("Cocoa", reason="Cocoa UI requires macOS")
+
 from macagentic.agent import ConversationLog, UsageTracker
 from macagentic.ui.projection import render_history
 from macagentic.ui.testing import UITestDriver
