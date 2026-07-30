@@ -1,123 +1,55 @@
 # macAgentic
 
-An agent harness powered by [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent).
+A native macOS Cocoa UI for [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent), written entirely in Python with [PyObjC](https://pyobjc.readthedocs.io/).
+It renders Markdown and mathematical formulas for polished agent responses.
+Model selection and tabs make it easy to switch models and manage multiple conversations.
 
-Run in the terminal:
+![macAgentic screenshot](docs/screenshot.png)
 
-```sh
-make install-tools
-make run
-```
+## Installation
 
-Agent tools live in `tools/<name>/` with a same-named shell launcher, a
-`main.py` implementation, `PROMPT.md`, and colocated tests. `make install-tools` creates
-safe per-user symlinks in `~/.local/bin`; ensure that directory is on `PATH`.
-Remove this project's links with `make uninstall-tools`.
-Tools may bundle agent skills under `tools/<name>/skills/<skillname>/SKILL.md`;
-they are loaded alongside user skills from `~/.agents/skills/`.
-
-`make run` and `make runui` regenerate `.build/tools.md` from each tool's
-`PROMPT.md` and substitute it into the `{{TOOLS}}` placeholder in the system
-prompt (`# Available Tools` lives in the prompt file). Custom instructions
-fill `{{CUSTOM_INSTRUCTIONS}}`. They do not install tools.
-Validate tool layouts with `make check-tools` and run only tool tests with
-`make test-tools`.
-
-## Google Workspace accounts
-
-The `gwsx` tool wraps the
-[Google Workspace CLI](https://github.com/googleworkspace/cli) with explicit,
-isolated account aliases. Install `gws` first (for example,
-`brew install googleworkspace-cli`), then add each account:
+Use [uv](https://docs.astral.sh/uv/) to install dependencies and launch the UI:
 
 ```sh
-gwsx account add private
-gwsx account add work
-gwsx account list
-gwsx account delete work
+uv sync
+uv run python -m macagentic --ui
 ```
 
-Account setup uses the interactive `gws auth setup` flow. Each alias has its own
-credentials and token cache under `~/.config/gwsx/accounts/`, so commands can
-target different accounts without switching global state:
+## Tools
 
-```sh
-gwsx private drive files list --params '{"pageSize": 5}'
-gwsx work calendar events list --params '{"calendarId": "primary"}'
-gwsx private auth login --scopes drive,gmail
-```
+macAgentic includes a small set of command-line tools for common agent tasks:
 
-The account alias is always required. All remaining arguments are passed to
-`gws` unchanged. Deleting an account removes its local profile and credentials;
-it does not revoke the OAuth grant in the Google account.
+- `gwsx` — access Google Workspace with explicit accounts
+- `noteheader` — create meeting-note headers
+- `things` — manage Things to-dos
+- `websearch` — search the web with Brave Search
 
-The harness maintains one conversation and alternates between `You:` and
-`Agent:` turns. The agent can run bash commands when needed, but answers simple
-questions directly. Press Control-C to interrupt the current run and return to
-the prompt; enter `/exit` or `/quit` to stop.
+## Configuration
 
-Start the optional native PyObjC UI:
+Defaults live in `config/config.toml`; override them per user in `~/.config/macagentic/config.toml`.
+You can configure:
 
-```sh
-make runui
-# equivalent to:
-uv run --frozen python -m macagentic --ui
-```
+- `model` — default model
+- `models` — fast, medium, and slow model choices
+- `openai_api_key` and `brave_api_key` — service credentials
+- `custom_prompt` — additional system instructions
+- `mounts` — directories exposed to agent workspaces
 
-The UI is a passive renderer over the agent's in-memory Markdown output. The
-agent does not depend on the UI, and the headless path does not import PyObjC.
-Press Option-Space globally to hide or reopen the UI.
+## Command-line flags
 
-Pass `--tooloutput` to either mode to include bash commands and their output:
+Pass these options when launching `python -m macagentic`:
 
-```sh
-make run ARGS="--tooloutput"
-make runui ARGS="--tooloutput"
-```
+- `--task-file PATH` / `--spec PATH`
+- `--model MODEL`
+- `--instructions PATH`
+- `--tool-instructions PATH`
+- `--ui`
+- `--tooloutput`
+- `--screenshot PATH`
+- `-h` / `--help`
 
-Run with an inline task or a task file from `tasks/`:
+An initial task may also be passed as a positional argument.
 
-```sh
-make run ARGS='"Fix the failing tests"'
-make run ARGS="--task-file tasks/example.md"
-make runui ARGS="--task-file tasks/example.md"
-```
+## License
 
-Fill `{{CUSTOM_INSTRUCTIONS}}` in the default prompt without editing the file:
-
-```sh
-make run ARGS="--instructions path/to/instructions.md"
-make runui ARGS="--instructions path/to/instructions.md"
-```
-
-The base prompt lives in `macagentic/agent/prompts/default.md`. With no
-`--instructions` argument, `{{CUSTOM_INSTRUCTIONS}}` is left empty.
-
-Project defaults are loaded from `config/config.toml`. Override any value in
-`~/.config/macagentic/config.toml`; user values win recursively. Supported
-values are `model`, `openai_api_key`, `brave_api_key`, `custom_prompt`, and a
-`[mounts]` table.
-
-Each agent runs from a clean `~/.tmpagent/<id>` directory containing `skills/`
-and configured user mounts. Mount keys may be nested relative paths; parent
-directories are created automatically:
-
-```toml
-[mounts]
-"notes/private" = "~/notes/private"
-"notes/a16z" = "~/notes/a16z"
-```
-
-Capture a completed UI render for debugging:
-
-```sh
-make debug-render QUERY="Show a Markdown table"
-```
-
-Use `--model` for a one-run model override. `OPENAI_API_KEY` in `.env` remains
-supported when `openai_api_key` is not set in TOML.
-
-Models use LiteLLM's native Responses API. Configure ordinary provider model
-IDs such as `openai/gpt-5.6-terra`; do not add an `openai/responses/` bridge
-prefix. Terminal runs print cumulative input, cache, output, and cost usage
-once after each turn. UI tabs show live cumulative usage in the top bar.
+macAgentic is licensed under the Apache License 2.0.
