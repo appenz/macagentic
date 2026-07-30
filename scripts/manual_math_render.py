@@ -66,6 +66,32 @@ CASES: dict[str, tuple[str, str]] = {
         r"Inline: $\nabla \cdot \mathbf{E} = \rho / \varepsilon_0$."
         "\n",
     ),
+    "maxwell_integral_list": (
+        "maxwell_integral_list",
+        "Here are Maxwell's equations in integral form:\n\n"
+        "1. **Gauss's law (electric)**\n"
+        "$$\n"
+        r"\oint_{\partial V} \mathbf{E}\cdot d\mathbf{A} = \frac{Q_{\mathrm{enc}}}{\varepsilon_0}"
+        "\n$$\n\n"
+        "2. **Gauss's law (magnetic)**\n"
+        "$$\n"
+        r"\oint_{\partial V} \mathbf{B}\cdot d\mathbf{A} = 0"
+        "\n$$\n\n"
+        "3. **Faraday's law**\n"
+        "$$\n"
+        r"\oint_{\partial S} \mathbf{E}\cdot d\boldsymbol{\ell} = -\frac{d}{dt}\int_S \mathbf{B}\cdot d\mathbf{A}"
+        "\n$$\n\n"
+        "4. **Ampère–Maxwell law**\n"
+        "$$\n"
+        r"\oint_{\partial S} \mathbf{B}\cdot d\boldsymbol{\ell}"
+        "\n=\n"
+        r"\mu_0 I_{\mathrm{enc}}"
+        "\n+\n"
+        r"\mu_0\varepsilon_0"
+        "\n"
+        r"\frac{d}{dt}\int_S \mathbf{E}\cdot d\mathbf{A}"
+        "\n$$\n",
+    ),
     "exp_series": (
         "exp_series",
         "Polynomial expansion of the exponential:\n\n"
@@ -166,6 +192,7 @@ def render_case(case_key: str) -> Path:
         lambda: "\ufffc" in driver.conversation_text()
         or "Compare" in driver.conversation_text()
         or "Maxwell" in driver.conversation_text()
+        or "Ampère" in driver.conversation_text()
         or "Polynomial" in driver.conversation_text(),
         timeout=10.0,
     )

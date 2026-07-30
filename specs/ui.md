@@ -75,7 +75,7 @@ class UITab:
     input_text: str = ""
     tool_call_descriptions: dict[str, str] = field(default_factory=dict)
     log_render_index: int = 0
-    math_cache: dict = field(default_factory=dict)
+    math_bitmap_cache: MathBitmapCache = field(default_factory=MathBitmapCache)
 
     # Execution
     thread: threading.Thread | None = None
@@ -200,3 +200,5 @@ order in which descriptions finish.
 - `macagentic/ui/screenshot.py`: Quartz window screenshot capture.
 - `macagentic/ui/screenshot_cli.py`: CLI entry point for screenshot capture.
 - `macagentic/ui/testing.py`: In-process Cocoa UI test driver.
+
+Screenshot testing is available; see `specs/testing.md`.

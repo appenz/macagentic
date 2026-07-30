@@ -29,8 +29,7 @@ from markdown_it import MarkdownIt
 
 from macagentic.ui.math_render import (
     MathBitmap,
-    MathCacheKey,
-    lookup_or_render_math_bitmap,
+    MathBitmapCache,
 )
 
 FONT_SIZE = 14.0
@@ -266,6 +265,54 @@ def _math_inline_source(inline_content: str, latex: str, markup: str) -> str:
     return wrapped
 
 
+# Display math must be lifted out before CommonMark list parsing: a line that is
+# only `+`/`-`/`*` inside `$$...$$` is a new list marker and splits the fence.
+_DISPLAY_MATH_RE = re.compile(r"\$\$(.*?)\$\$", re.DOTALL)
+_DISPLAY_MATH_PLACEHOLDER_RE = re.compile(r"^MACAGENTIC_MATH_(\d+)$")
+_DISPLAY_MATH_PLACEHOLDER = "MACAGENTIC_MATH_{index}"
+
+
+def _extract_display_math(
+    source: str,
+) -> tuple[str, list[tuple[str, int, int]], list[tuple[int, int]]]:
+    """Replace `$$...$$` with top-level placeholders; return parse text + spans.
+
+    Returns `(parse_source, blocks, anchors)` where each block is
+    `(latex, orig_start, orig_end)` for the full `$$...$$` span, and `anchors`
+    map parse-source offsets back to `source` offsets.
+    """
+    blocks: list[tuple[str, int, int]] = []
+    anchors: list[tuple[int, int]] = [(0, 0)]
+    out: list[str] = []
+    mod_len = 0
+    last = 0
+    for match in _DISPLAY_MATH_RE.finditer(source):
+        gap = source[last : match.start()]
+        out.append(gap)
+        mod_len += len(gap)
+        index = len(blocks)
+        blocks.append((match.group(1), match.start(), match.end()))
+        placeholder = f"\n\n$${_DISPLAY_MATH_PLACEHOLDER.format(index=index)}$$\n\n"
+        anchors.append((mod_len, match.start()))
+        out.append(placeholder)
+        mod_len += len(placeholder)
+        anchors.append((mod_len, match.end()))
+        last = match.end()
+    out.append(source[last:])
+    return "".join(out), blocks, anchors
+
+
+def _map_parse_to_source(parse_pos: int, anchors: list[tuple[int, int]]) -> int:
+    mod_base = 0
+    orig_base = 0
+    for mod_pos, orig_pos in anchors:
+        if mod_pos > parse_pos:
+            break
+        mod_base = mod_pos
+        orig_base = orig_pos
+    return orig_base + (parse_pos - mod_base)
+
+
 def _backing_scale() -> float:
     screen = NSScreen.mainScreen()
     if screen is None:
@@ -285,17 +332,16 @@ def _append_math_attachment(
     inline: bool,
     color,
     font_size: float,
-    math_cache: dict[MathCacheKey, MathBitmap],
+    math_bitmap_cache: MathBitmapCache,
     scale_factor: float,
 ) -> tuple[int, int, MathBitmap]:
     start = result.length()
-    bitmap = lookup_or_render_math_bitmap(
-        math_cache,
+    bitmap = math_bitmap_cache.render(
         latex,
-        inline=inline,
+        inline,
+        font_size,
+        scale_factor,
         color=color,
-        font_size=font_size,
-        scale_factor=scale_factor,
     )
     attachment = NSTextAttachment.alloc().init()
     attachment.setImage_(bitmap.image)
@@ -391,7 +437,16 @@ class MarkdownRenderer:
         self._expanded: set[str] = set()
         self.block_ranges: list[tuple[str, int, int]] = []
         self._source_markdown = ""
+        self._parse_source = ""
+        self._parse_anchors: list[tuple[int, int]] = [(0, 0)]
+        self._display_math: list[tuple[str, int, int]] = []
         self._source_map: list[tuple[int, int, int, int]] = []
+
+    def _source_pos(self, parse_pos: int) -> int:
+        return _map_parse_to_source(parse_pos, self._parse_anchors)
+
+    def _source_line_start(self, line: int) -> int:
+        return self._source_pos(_md_line_start(self._parse_source, line))
 
     def markdown_for_selection(self, char_range: tuple[int, int]) -> str:
         """Return the contiguous source-Markdown slice for a rendered selection.
@@ -446,15 +501,19 @@ class MarkdownRenderer:
         text: str,
         color,
         *,
-        math_cache: dict[MathCacheKey, MathBitmap] | None = None,
+        math_bitmap_cache: MathBitmapCache | None = None,
         scale_factor: float | None = None,
     ) -> NSMutableAttributedString:
         source = text.rstrip()
         self._source_markdown = source
         self._source_map = []
-        cache = math_cache if math_cache is not None else {}
+        parse_source, display_math, anchors = _extract_display_math(source)
+        self._parse_source = parse_source
+        self._display_math = display_math
+        self._parse_anchors = anchors
+        cache = math_bitmap_cache if math_bitmap_cache is not None else MathBitmapCache()
         backing_scale = scale_factor if scale_factor is not None else _backing_scale()
-        tokens = self._parser.parse(source)
+        tokens = self._parser.parse(parse_source)
         self._blocks = {}
         self.block_ranges = []
         blocks: list[tuple[str, object, str | None, list]] = []
@@ -465,14 +524,14 @@ class MarkdownRenderer:
 
             if token.type in {"bullet_list_open", "ordered_list_open"}:
                 list_text, list_segments, i = self._render_list(
-                    tokens, i, color, math_cache=cache, scale_factor=backing_scale
+                    tokens, i, color, math_bitmap_cache=cache, scale_factor=backing_scale
                 )
                 blocks.append((token.type, list_text, None, list_segments))
                 continue
 
             if token.type in {"math_block", "math_block_label"}:
                 block, segments = self._render_math_block(
-                    token, color, math_cache=cache, scale_factor=backing_scale
+                    token, color, math_bitmap_cache=cache, scale_factor=backing_scale
                 )
                 blocks.append((token.type, block, None, segments))
                 i += 1
@@ -549,8 +608,7 @@ class MarkdownRenderer:
                             font = NSFont.boldSystemFontOfSize_(size)
                         inline_token = tokens[i]
                         inline_content = inline_token.content or ""
-                        inline_md_start = _md_line_start(
-                            source,
+                        inline_md_start = self._source_line_start(
                             inline_token.map[0] if inline_token.map else 0,
                         )
                         inline_block, inline_segments = self._render_inline(
@@ -559,7 +617,7 @@ class MarkdownRenderer:
                             base_font=font,
                             inline_content=inline_content,
                             inline_md_start=inline_md_start,
-                            math_cache=cache,
+                            math_bitmap_cache=cache,
                             scale_factor=backing_scale,
                         )
                         offset = block.length()
@@ -617,10 +675,12 @@ class MarkdownRenderer:
         if not token.map or rendered_length <= 0:
             return []
         md_start, md_end = _md_line_range(
-            self._source_markdown,
+            self._parse_source,
             token.map[0],
             token.map[1],
         )
+        md_start = self._source_pos(md_start)
+        md_end = self._source_pos(md_end)
         content = (token.content or "").rstrip("\n")
         fence_start = self._source_markdown.find(content, md_start, md_end)
         if fence_start == -1:
@@ -628,13 +688,21 @@ class MarkdownRenderer:
         ui_end = min(rendered_length, len(content))
         return [(0, ui_end, fence_start, fence_start + ui_end)]
 
-    def _render_math_block(self, token, color, *, math_cache, scale_factor):
-        md_start, md_end = _md_line_range(
-            self._source_markdown,
-            token.map[0],
-            token.map[1],
-        )
+    def _render_math_block(self, token, color, *, math_bitmap_cache, scale_factor):
         latex = (token.content or "").strip()
+        placeholder = _DISPLAY_MATH_PLACEHOLDER_RE.match(latex)
+        if placeholder is not None:
+            index = int(placeholder.group(1))
+            latex, md_start, md_end = self._display_math[index]
+            latex = latex.strip()
+        else:
+            md_start, md_end = _md_line_range(
+                self._parse_source,
+                token.map[0],
+                token.map[1],
+            )
+            md_start = self._source_pos(md_start)
+            md_end = self._source_pos(md_end)
         block = NSMutableAttributedString.alloc().init()
         rendered_start = block.length()
         _, _, bitmap = _append_math_attachment(
@@ -643,7 +711,7 @@ class MarkdownRenderer:
             inline=False,
             color=color,
             font_size=FONT_SIZE,
-            math_cache=math_cache,
+            math_bitmap_cache=math_bitmap_cache,
             scale_factor=scale_factor,
         )
         line_height = _math_line_height(bitmap)
@@ -694,7 +762,7 @@ class MarkdownRenderer:
         return style
 
     def _render_list(
-        self, tokens, start: int, color, depth: int = 0, *, math_cache, scale_factor
+        self, tokens, start: int, color, depth: int = 0, *, math_bitmap_cache, scale_factor
     ):
         font = NSFont.systemFontOfSize_(FONT_SIZE)
         result = NSMutableAttributedString.alloc().init()
@@ -705,6 +773,10 @@ class MarkdownRenderer:
         )
         indent = LIST_BASE_INDENT + depth * INDENT_PER_LEVEL
         item_number = 0
+        if ordered:
+            start_attr = tokens[start].attrGet("start")
+            if start_attr is not None:
+                item_number = int(start_attr) - 1
         first_item = True
         i = start + 1
 
@@ -749,8 +821,7 @@ class MarkdownRenderer:
                         if tokens[i].type == "inline":
                             inline_token = tokens[i]
                             inline_content = inline_token.content or ""
-                            inline_md_start = _md_line_start(
-                                self._source_markdown,
+                            inline_md_start = self._source_line_start(
                                 inline_token.map[0] if inline_token.map else 0,
                             )
                             inline_block, inline_segments = self._render_inline(
@@ -759,7 +830,7 @@ class MarkdownRenderer:
                                 base_font=font,
                                 inline_content=inline_content,
                                 inline_md_start=inline_md_start,
-                                math_cache=math_cache,
+                                math_bitmap_cache=math_bitmap_cache,
                                 scale_factor=scale_factor,
                             )
                             offset = item_line.length()
@@ -779,7 +850,7 @@ class MarkdownRenderer:
                         i,
                         color,
                         depth + 1,
-                        math_cache=math_cache,
+                        math_bitmap_cache=math_bitmap_cache,
                         scale_factor=scale_factor,
                     )
                     nested.appendAttributedString_(
@@ -818,7 +889,7 @@ class MarkdownRenderer:
         *,
         inline_content: str = "",
         inline_md_start: int = 0,
-        math_cache,
+        math_bitmap_cache,
         scale_factor,
     ):
         result = NSMutableAttributedString.alloc().init()
@@ -922,7 +993,7 @@ class MarkdownRenderer:
                     inline=True,
                     color=color,
                     font_size=font.pointSize(),
-                    math_cache=math_cache,
+                    math_bitmap_cache=math_bitmap_cache,
                     scale_factor=scale_factor,
                 )
                 segments.append((rendered_start, result.length(), md_start, md_end))

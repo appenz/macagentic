@@ -10,9 +10,8 @@ from Foundation import NSString
 from unittest.mock import patch
 
 from macagentic.ui.math_render import (
+    MathBitmapCache,
     MathRenderError,
-    lookup_or_render_math_bitmap,
-    render_latex_to_bitmap,
 )
 from macagentic.ui.markdown import (
     BLOCK_GAP,
@@ -237,9 +236,9 @@ def test_markdown_links_and_table_alignment() -> None:
 
 def test_markdown_renders_inline_and_block_math() -> None:
     renderer = MarkdownRenderer()
-    cache = {}
+    cache = MathBitmapCache()
     source = "Energy $E=mc^2$ here\n\n$$\n24 \\times 576\n$$\n"
-    rendered = renderer.render(source, NSColor.blackColor(), math_cache=cache)
+    rendered = renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
     text = str(rendered.string())
 
     assert "\ufffc" in text
@@ -248,36 +247,41 @@ def test_markdown_renders_inline_and_block_math() -> None:
     assert len(cache) == 2
 
 
-def test_math_cache_reuses_bitmaps() -> None:
-    cache = {}
+def test_math_bitmap_cache_reuses_bitmaps() -> None:
+    cache = MathBitmapCache()
     renderer = MarkdownRenderer()
     source = "Again $x^2$ and $x^2$"
 
-    renderer.render(source, NSColor.blackColor(), math_cache=cache)
+    renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
     assert len(cache) == 1
+    first = next(iter(cache._entries.values()))
 
-    first = next(iter(cache.values()))
-    renderer.render(source, NSColor.blackColor(), math_cache=cache)
-    assert next(iter(cache.values())) is first
+    renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    assert len(cache) == 1
+    assert next(iter(cache._entries.values())) is first
 
 
 def test_display_math_uses_tall_line_height() -> None:
     renderer = MarkdownRenderer()
     latex = r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}"
     source = f"$$\n{latex}\n$$"
-    rendered = renderer.render(source, NSColor.blackColor(), math_cache={})
+    rendered = renderer.render(
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=MathBitmapCache(),
+    )
     style = _style_at(rendered, "\ufffc")
     assert style.minimumLineHeight() > LINE_HEIGHT
     assert style.minimumLineHeight() >= 35.0
 
 
-def test_render_latex_to_bitmap_produces_png() -> None:
-    bitmap = render_latex_to_bitmap(
+def test_math_bitmap_cache_produces_png() -> None:
+    bitmap = MathBitmapCache().render(
         r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}",
-        inline=False,
+        False,
+        14.0,
+        2.0,
         color=NSColor.blackColor(),
-        font_size=14.0,
-        scale_factor=2.0,
     )
     assert bitmap is not None
     rep = NSBitmapImageRep.alloc().initWithData_(bitmap.image.TIFFRepresentation())
@@ -289,15 +293,16 @@ def test_render_latex_to_bitmap_produces_png() -> None:
 
 def test_markdown_math_render_failure_raises() -> None:
     renderer = MarkdownRenderer()
-    with patch(
-        "macagentic.ui.markdown.lookup_or_render_math_bitmap",
+    with patch.object(
+        MathBitmapCache,
+        "render",
         side_effect=MathRenderError("bad math"),
     ):
         try:
             renderer.render(
                 "Bad $x^2$ math",
                 NSColor.blackColor(),
-                math_cache={},
+                math_bitmap_cache=MathBitmapCache(),
             )
         except MathRenderError:
             return
@@ -306,12 +311,12 @@ def test_markdown_math_render_failure_raises() -> None:
 
 def test_markdown_for_selection_preserves_math_markdown() -> None:
     renderer = MarkdownRenderer()
-    cache = {}
+    cache = MathBitmapCache()
     source = "Before $x^2$ after"
     rendered = renderer.render(
         source,
         NSColor.blackColor(),
-        math_cache=cache,
+        math_bitmap_cache=cache,
     )
     text = str(rendered.string())
     math_index = text.index("\ufffc")
@@ -324,6 +329,30 @@ def test_markdown_for_selection_preserves_math_markdown() -> None:
 
     copied_mixed = renderer.markdown_for_selection((0, math_index + 1))
     assert copied_mixed == "Before $x^2$"
+
+
+def test_display_math_inside_list_with_plus_line_renders() -> None:
+    """A lone `+` inside $$ must not split the fence via CommonMark lists."""
+    renderer = MarkdownRenderer()
+    cache = MathBitmapCache()
+    source = (
+        "1. **Ampère–Maxwell law**\n"
+        "$$\n"
+        r"\oint_{\partial S} \mathbf{B}\cdot d\boldsymbol{\ell}"
+        "\n=\n"
+        r"\mu_0 I_{\mathrm{enc}}"
+        "\n+\n"
+        r"\mu_0\varepsilon_0\frac{d}{dt}\int_S \mathbf{E}\cdot d\mathbf{A}"
+        "\n$$\n"
+    )
+    rendered = renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    text = str(rendered.string())
+
+    assert "\ufffc" in text
+    assert "$$" not in text
+    assert r"\oint" not in text
+    assert len(cache) == 1
+    assert renderer.markdown_for_selection((0, len(text))) == source.rstrip()
 
 
 def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
@@ -340,7 +369,11 @@ def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
         r"\oint \mathbf{B}\cdot d\mathbf{\ell} = \mu_0 I"
         "\n$$\n"
     )
-    rendered = renderer.render(source, NSColor.blackColor(), math_cache={})
+    rendered = renderer.render(
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=MathBitmapCache(),
+    )
     text = str(rendered.string())
     copied = renderer.markdown_for_selection((0, len(text)))
 

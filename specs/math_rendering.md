@@ -2,147 +2,83 @@
 
 ## Overview
 
-The Cocoa UI renders LaTeX math-mode expressions in Markdown (`$...$` inline,
-`$$...$$` display) as bitmap attachments in the conversation log. Rendering
-uses ziamath (pure Python) for SVG and WebKit (via PyObjC) to rasterize SVG to
-bitmap. The CLI is unchanged and prints raw Markdown.
+The Cocoa UI renders Markdown math (`$...$` inline, `$$...$$` display) as
+bitmap attachments. Pipeline: dollarmath tokens → ziamath SVG → WebKit
+rasterization. The CLI prints raw Markdown.
 
-Only `macagentic/ui/math_render.py` imports ziamath. `markdown.py` integrates
-math tokens and owns the source map used for copy. `core.py` does not import
-`math_render`.
+Only `math_render.py` imports ziamath. `markdown.py` owns token integration and
+the copy source map. `core.py` does not import `math_render`.
+
+## Architecture
+
+- Each `UITab` owns a `MathBitmapCache`; there is no global cache. The active
+  tab’s cache is passed into `MarkdownRenderer.render()`.
+- Before parsing, `$$...$$` spans are lifted to top-level placeholders so
+  CommonMark lists cannot split display math (e.g. a lone `+` line).
+- Render failure raises; there is no monospace fallback.
+- WebKit rasterization is single-flight on the AppKit main thread.
+- Copy uses `markdown_for_selection` only — never attachment attributes or
+  `math_render`.
 
 ## Math Render API
 
 ```python
 @dataclass(frozen=True)
-class MathCacheKey:
-    latex: str
-    inline: bool
-    font_size: float
-    color_hex: str
-    scale_factor: float
-
-
-@dataclass(frozen=True)
 class MathBitmap:
     image: NSImage
-    size: tuple[float, float]
-    baseline: float
+    size: tuple[float, float]  # points
+    baseline: float            # inline vertical alignment offset
 
 
-def render_latex_to_bitmap(
-    latex: str,
-    *,
-    inline: bool,
-    color: NSColor,
-    font_size: float,
-    scale_factor: float = 1.0,
-) -> MathBitmap: ...
-
-
-def lookup_or_render_math_bitmap(
-    cache: dict[MathCacheKey, MathBitmap],
-    latex: str,
-    *,
-    inline: bool,
-    color: NSColor,
-    font_size: float,
-    scale_factor: float,
-) -> MathBitmap: ...
+class MathBitmapCache:
+    def render(
+        self,
+        latex: str,
+        inline: bool,
+        font_size: float,
+        scale_factor: float,
+        *,
+        color: NSColor,
+    ) -> MathBitmap: ...
 ```
 
-- `render_latex_to_bitmap`: Renders a LaTeX math expression to an `NSImage`.
-  Raises on failure. Must run on AppKit's main thread (dispatches there when
-  called from a worker thread).
-- `lookup_or_render_math_bitmap`: Returns a cached bitmap or renders, stores,
-  and returns it.
-- `MathBitmap.size`: Attachment width and height in points.
-- `MathBitmap.baseline`: ziamath `getyofst()` — bottom-of-bbox offset for
-  inline attachment alignment.
-
-Internal implementation uses `ziamath.Latex`, `getsize()`, `getyofst()`, and
-`svg()`. A single shared offscreen `WKWebView` rasterizes SVG via snapshot.
-WebKit rendering is single-flight on the main thread.
-
-## Bitmap Cache
-
-Each `UITab` owns `math_cache: dict[MathCacheKey, MathBitmap]`. The cache
-persists for the tab lifetime. `MacAgenticUI._render_window()` passes the active
-tab's cache to `MarkdownRenderer.render()`.
-
-There is no global render cache in `math_render.py`.
+`MathBitmapCache.render` returns a cached bitmap or renders, stores, and
+returns it. Cache keys are private. Raises on failure. Rasterization runs on
+the AppKit main thread.
 
 ## Markdown Integration
 
-`MarkdownRenderer` enables `dollarmath_plugin` on the existing parser
-(`allow_digits=True`) and handles `math_inline`, `math_block`, and
-`math_block_label` tokens.
-
 ```python
 class MarkdownRenderer:
-    _source_markdown: str
-    _source_map: list[tuple[int, int, int, int]]
-
     def render(
         self,
         text: str,
         color,
         *,
-        math_cache: dict[MathCacheKey, MathBitmap],
+        math_bitmap_cache: MathBitmapCache,
     ) -> NSMutableAttributedString: ...
 
     def markdown_for_selection(self, char_range: tuple[int, int]) -> str: ...
 ```
 
-- `_source_markdown`: The Markdown string passed to the most recent `render()`.
-- `_source_map`: Half-open ranges linking rendered character indices to
-  source Markdown indices. Plain text is 1:1. A math attachment occupies one
-  rendered character and maps to the full `$...$` or `$$...$$` span. UI-only
-  text such as `[copy]` links has no mapping and is omitted from copy output.
-- `markdown_for_selection`: Returns a contiguous substring of
-  `_source_markdown` for the rendered selection. Overlapping map entries
-  determine the source start/end; characters between those entries (emphasis
-  markers, blank lines, softbreaks) are included. Do not reconstruct by
-  concatenating mapped fragments — that drops unmapped source characters.
+`render` parses with `dollarmath_plugin` (`allow_digits=True`) and handles
+`math_inline`, `math_block`, and `math_block_label`. Math size follows the
+surrounding font; pass window backing scale as `scale_factor`.
 
-On render failure, `lookup_or_render_math_bitmap` raises. There is no monospace
-fallback.
+`markdown_for_selection` returns a contiguous substring of the last rendered
+source Markdown (including unmapped characters between mapped spans). Do not
+reconstruct by concatenating mapped fragments.
 
-## Font Sizing
+`ConversationTextView.copy_` writes that Markdown to the pasteboard. A math
+attachment is one atomic character.
 
-Math size follows the surrounding text at render time. Inline math in body
-text uses `base_font.pointSize()`. Inline math in headings uses
-`HEADING_FONT_SIZES`. Display blocks use `FONT_SIZE`. Pass the window backing
-scale as `scale_factor` for Retina; attachment bounds stay in points. WebKit
-rasterizes at at least 2x to avoid blank snapshots, and the SVG is CSS-scaled
-to fill that snapshot so glyphs are not undersized. ziamath is called with
-`margin=0` and size `font_size * 1.1` so STIX glyphs optically match SF Pro.
-Display-block line height is `max(LINE_HEIGHT, height - baseline)` so tall
-formulas are not clipped.
+## Testing
 
-## Copy
-
-`ConversationTextView` overrides `copy_`. Copy calls
-`renderer.markdown_for_selection(selectedRange())` and writes plain text to
-the pasteboard. This covers keyboard, menu, and context-menu Copy.
-
-Copy returns a contiguous slice of the rendered source Markdown (see
-`markdown_for_selection` above), not a reconstruction from attachment
-attributes or mapped fragments alone.
-
-A math formula is one atomic attachment character; it cannot be partially
-selected. Paste is unchanged.
-
-Copy never reads attachment attributes or calls `math_render`.
-
-## Dependencies
-
-Add with `uv add ziamath mdit-py-plugins`. Do not hand-edit `pyproject.toml`.
-WebKit is provided by macOS via `pyobjc-framework-WebKit`.
+Screenshot testing for math rendering is described in `specs/testing.md`.
 
 ## Files
 
 - `macagentic/ui/math_render.py`: ziamath wrapper and WebKit bitmap rendering.
 - `macagentic/ui/markdown.py`: math token handling, source map, copy helper.
 - `macagentic/ui/core.py`: custom `copy_` on `ConversationTextView`, `UITab`
-  math cache, `_render_window` reentrancy guard.
+  math bitmap cache, `_render_window` reentrancy guard.

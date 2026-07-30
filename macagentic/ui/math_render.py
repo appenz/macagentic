@@ -20,7 +20,7 @@ _ZIAMATH_SIZE_SCALE = 1.1
 
 
 @dataclass(frozen=True)
-class MathCacheKey:
+class _CacheKey:
     latex: str
     inline: bool
     font_size: float
@@ -37,6 +37,45 @@ class MathBitmap:
 
 class MathRenderError(RuntimeError):
     pass
+
+
+class MathBitmapCache:
+    """Tab-scoped cache of rendered math bitmaps. Keys are private."""
+
+    def __init__(self) -> None:
+        self._entries: dict[_CacheKey, MathBitmap] = {}
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def render(
+        self,
+        latex: str,
+        inline: bool,
+        font_size: float,
+        scale_factor: float,
+        *,
+        color: NSColor,
+    ) -> MathBitmap:
+        key = _CacheKey(
+            latex=latex,
+            inline=inline,
+            font_size=font_size,
+            color_hex=_color_hex(color),
+            scale_factor=scale_factor,
+        )
+        cached = self._entries.get(key)
+        if cached is not None:
+            return cached
+        bitmap = _render_latex_to_bitmap(
+            latex,
+            inline,
+            font_size,
+            scale_factor,
+            color=color,
+        )
+        self._entries[key] = bitmap
+        return bitmap
 
 
 def _color_hex(color: NSColor) -> str:
@@ -161,11 +200,11 @@ def _svg_to_nsimage(
 
 def _render_latex_to_bitmap_main(
     latex: str,
-    *,
     inline: bool,
-    color_hex: str,
     font_size: float,
     scale_factor: float,
+    *,
+    color_hex: str,
 ) -> MathBitmap:
     _ensure_application()
 
@@ -194,13 +233,13 @@ def _render_latex_to_bitmap_main(
     return MathBitmap(image=image, size=(width, height), baseline=baseline)
 
 
-def render_latex_to_bitmap(
+def _render_latex_to_bitmap(
     latex: str,
-    *,
     inline: bool,
-    color: NSColor,
     font_size: float,
-    scale_factor: float = 1.0,
+    scale_factor: float,
+    *,
+    color: NSColor,
 ) -> MathBitmap:
     if not latex.strip():
         raise MathRenderError("Empty LaTeX expression")
@@ -209,10 +248,10 @@ def render_latex_to_bitmap(
     if NSThread.isMainThread():
         return _render_latex_to_bitmap_main(
             latex,
-            inline=inline,
+            inline,
+            font_size,
+            scale_factor,
             color_hex=color_hex,
-            font_size=font_size,
-            scale_factor=scale_factor,
         )
 
     from dispatch import dispatch_get_main_queue, dispatch_sync
@@ -222,41 +261,11 @@ def render_latex_to_bitmap(
     def wrapper() -> None:
         result["value"] = _render_latex_to_bitmap_main(
             latex,
-            inline=inline,
+            inline,
+            font_size,
+            scale_factor,
             color_hex=color_hex,
-            font_size=font_size,
-            scale_factor=scale_factor,
         )
 
     dispatch_sync(dispatch_get_main_queue(), wrapper)
     return result["value"]
-
-
-def lookup_or_render_math_bitmap(
-    cache: dict[MathCacheKey, MathBitmap],
-    latex: str,
-    *,
-    inline: bool,
-    color: NSColor,
-    font_size: float,
-    scale_factor: float,
-) -> MathBitmap:
-    key = MathCacheKey(
-        latex=latex,
-        inline=inline,
-        font_size=font_size,
-        color_hex=_color_hex(color),
-        scale_factor=scale_factor,
-    )
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    bitmap = render_latex_to_bitmap(
-        latex,
-        inline=inline,
-        color=color,
-        font_size=font_size,
-        scale_factor=scale_factor,
-    )
-    cache[key] = bitmap
-    return bitmap

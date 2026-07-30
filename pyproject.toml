@@ -1,7 +1,7 @@
 [project]
 name = "macagentic"
 version = "0.1.0"
-description = "An agent harness powered by mini-swe-agent"
+description = "A native macOS Cocoa UI for mini-swe-agent, written in 100% python"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

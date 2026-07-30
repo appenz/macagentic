@@ -5,6 +5,7 @@
 1. This Overview spec
 2. Any specs relevant to the task in the `specs/` folder.
 3. If you are writing tests, any relevant spec in the `tests/specs` folder
+4. Screenshot / visual UI checks: `specs/testing.md`
 
 macAgentic is a macOS-native agent written in Python.
 

@@ -52,7 +52,7 @@ from macagentic.agent import Agent
 from macagentic.app import app
 from macagentic.history import save_history
 from macagentic.ui.helpers import request_fast_text
-from macagentic.ui.math_render import MathBitmap, MathCacheKey
+from macagentic.ui.math_render import MathBitmapCache
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
 from macagentic.ui.projection import (
     display_model_name,
@@ -305,7 +305,7 @@ class UITab:
     input_text: str = ""
     tool_call_descriptions: dict[str, str] = field(default_factory=dict)
     log_render_index: int = 0
-    math_cache: dict[MathCacheKey, MathBitmap] = field(default_factory=dict)
+    math_bitmap_cache: MathBitmapCache = field(default_factory=MathBitmapCache)
 
     # Execution
     thread: threading.Thread | None = None
@@ -635,7 +635,7 @@ class MacAgenticUI:
         rendered = self.renderer.render(
             transcript,
             NSColor.darkGrayColor(),
-            math_cache=self.active_tab.math_cache,
+            math_bitmap_cache=self.active_tab.math_bitmap_cache,
             scale_factor=self._window_backing_scale(),
         )
         content_height = self._measure(rendered)
