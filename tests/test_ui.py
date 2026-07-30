@@ -90,7 +90,7 @@ def test_ui_passively_renders_conversation_log(monkeypatch) -> None:
     ui = MacAgenticUI(agent)
     ui.start(dont_run_app=True)
     assert ui.window is None
-    ui.hotkey_pressed()
+    ui.hotkey_pressed(activate=False)
     driver = UITestDriver(ui)
 
     assert ui.window.frame().size.width == 672
@@ -145,9 +145,9 @@ def test_ui_passively_renders_conversation_log(monkeypatch) -> None:
     )
     assert ui.window is not None
 
-    ui.hotkey_pressed()
+    ui.hotkey_pressed(activate=False)
     assert ui.window is None
-    ui.hotkey_pressed()
+    ui.hotkey_pressed(activate=False)
     assert ui.window is not None
     ui.close_window()
     expected_history = render_history(

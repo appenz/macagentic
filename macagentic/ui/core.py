@@ -605,7 +605,7 @@ class MacAgenticUI:
             return 2.0
         return max(float(screen.backingScaleFactor()), 2.0)
 
-    def _render_window(self) -> None:
+    def _render_window(self, *, activate: bool = False) -> None:
         if not self.tabs:
             return
         if self._rendering:
@@ -613,14 +613,22 @@ class MacAgenticUI:
             return
         self._rendering = True
         try:
-            self._render_window_body()
+            self._render_window_body(activate=activate)
         finally:
             self._rendering = False
             if self._render_pending:
                 self._render_pending = False
                 self._render_window()
 
-    def _render_window_body(self) -> None:
+    def _activate_window(self) -> None:
+        if self.window is None or self.input_field is None:
+            return
+        self.window.orderFrontRegardless()
+        self.window.makeKeyWindow()
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        self.window.makeFirstResponder_(self.input_field)
+
+    def _render_window_body(self, *, activate: bool = False) -> None:
         if not self.tabs:
             return
         draft = self._current_input()
@@ -741,10 +749,10 @@ class MacAgenticUI:
         self._render_input(root, input_y, self.active_tab.input_text)
 
         self.window.display()
-        self.window.orderFrontRegardless()
-        self.window.makeKeyWindow()
-        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        self.window.makeFirstResponder_(self.input_field)
+        if activate:
+            self._activate_window()
+        elif self.window.isKeyWindow() and self.input_field is not None:
+            self.window.makeFirstResponder_(self.input_field)
 
     def _render_top_bar(self, root, y: float) -> None:
         bar = NSBox.alloc().initWithFrame_(
@@ -1087,9 +1095,9 @@ class MacAgenticUI:
             self.window = None
         NSApplication.sharedApplication().hide_(None)
 
-    def hotkey_pressed(self) -> None:
+    def hotkey_pressed(self, *, activate: bool = True) -> None:
         if self.window is None:
-            self._render_window()
+            self._render_window(activate=activate)
         else:
             self.close_window()
 

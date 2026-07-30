@@ -10,7 +10,7 @@ def run_ui(*, initial_task: str | None = None) -> None:
     ui = MacAgenticUI(app.create_agent(render_markdown=True))
     ui.start(dont_run_app=True)
     if app.screenshot_path is not None:
-        ui.hotkey_pressed()
+        ui.hotkey_pressed(activate=False)
     if initial_task:
         ui.submit(initial_task)
     NSApplication.sharedApplication().run()

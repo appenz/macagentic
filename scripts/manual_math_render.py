@@ -162,7 +162,7 @@ def _build_ui(monkey_targets: dict) -> tuple[object, UITestDriver]:
     agent = FakeAgent()
     ui = MacAgenticUI(agent)
     ui.start(dont_run_app=True)
-    ui.hotkey_pressed()
+    ui.hotkey_pressed(activate=False)
     _spin(0.3)
     return ui, UITestDriver(ui)
 
