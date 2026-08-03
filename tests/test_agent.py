@@ -426,6 +426,34 @@ def test_agent_tracks_usage_from_every_model_call(tmp_path: Path) -> None:
     assert snapshot.cost == 0.125
 
 
+def test_response_update_already_includes_recorded_usage(
+    tmp_path: Path,
+) -> None:
+    agent = make_agent(tmp_path, ui=None)
+    agent.model = FakeModel()
+    agent.model.query = lambda _messages: text_response(
+        "Done.",
+        usage={"input_tokens": 120, "output_tokens": 15},
+        cost=0.125,
+    )
+    observed = []
+
+    class RecordingUI:
+        def update(self) -> None:
+            observed.append(
+                (
+                    len(agent.conversation_log.snapshot()),
+                    agent.usage.snapshot().cost,
+                )
+            )
+
+    agent.ui = RecordingUI()
+    agent.run_turn("Track it")
+
+    usage_updates = [entry for entry in observed if entry[1] == 0.125]
+    assert usage_updates == [(4, 0.125)]
+
+
 def test_interrupt_releases_model_wait_and_discards_late_result(
     tmp_path: Path,
 ) -> None:

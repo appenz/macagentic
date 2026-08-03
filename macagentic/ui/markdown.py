@@ -1,5 +1,6 @@
 """Native Cocoa Markdown rendering."""
 
+from dataclasses import dataclass
 from hashlib import sha1
 import re
 
@@ -426,45 +427,24 @@ def _linkify_text_mapped(text, color, font, md_start: int):
     return result, segments
 
 
-class MarkdownRenderer:
-    """Render Markdown into one NSAttributedString and track interactive blocks."""
+@dataclass(frozen=True)
+class MarkdownDisplayMap:
+    """Pure-Python metadata connecting rendered ranges to Markdown source."""
 
-    def __init__(self) -> None:
-        self._parser = (
-            MarkdownIt().enable("table").use(dollarmath_plugin, allow_digits=True)
-        )
-        self._blocks: dict[str, str] = {}
-        self._expanded: set[str] = set()
-        self.block_ranges: list[tuple[str, int, int]] = []
-        self._source_markdown = ""
-        self._parse_source = ""
-        self._parse_anchors: list[tuple[int, int]] = [(0, 0)]
-        self._display_math: list[tuple[str, int, int]] = []
-        self._source_map: list[tuple[int, int, int, int]] = []
+    markdown_source: str
+    source_spans: tuple[tuple[int, int, int, int], ...]
+    block_contents: dict[str, str]
+    block_ranges: tuple[tuple[str, int, int], ...]
 
-    def _source_pos(self, parse_pos: int) -> int:
-        return _map_parse_to_source(parse_pos, self._parse_anchors)
-
-    def _source_line_start(self, line: int) -> int:
-        return self._source_pos(_md_line_start(self._parse_source, line))
-
-    def markdown_for_selection(self, char_range: tuple[int, int]) -> str:
-        """Return the contiguous source-Markdown slice for a rendered selection.
-
-        Mapped spans locate the selection in `_source_markdown`. The result is
-        one substring of that source (not a join of mapped fragments), so
-        unmapped source characters between spans — emphasis markers, blank
-        lines, softbreak newlines — are preserved. UI-only rendered text with
-        no source mapping is omitted by not extending the slice beyond the
-        overlapping mapped ranges.
-        """
+    def markdown_for_range(self, char_range: tuple[int, int]) -> str:
+        """Return the contiguous source-Markdown slice for a rendered range."""
         start, length = char_range
         if length <= 0:
             return ""
         end = start + length
         md_from: int | None = None
         md_to: int | None = None
-        for rendered_start, rendered_end, md_start, md_end in self._source_map:
+        for rendered_start, rendered_end, md_start, md_end in self.source_spans:
             if rendered_end <= start or rendered_start >= end:
                 continue
             overlap_start = max(rendered_start, start)
@@ -484,38 +464,47 @@ class MarkdownRenderer:
         if md_from is None or md_to is None or md_to <= md_from:
             return ""
 
-        # Include unmapped source at the edges (e.g. ** markers) so copy is a
-        # true substring of the source, not a reconstruction of mapped pieces.
+        # Include unmapped source at the edges (e.g. emphasis markers) so the
+        # result is a source substring rather than reconstructed fragments.
         covered: set[int] = set()
-        for _r0, _r1, m0, m1 in self._source_map:
+        for _r0, _r1, m0, m1 in self.source_spans:
             covered.update(range(m0, m1))
-        source_len = len(self._source_markdown)
         while md_from > 0 and (md_from - 1) not in covered:
             md_from -= 1
-        while md_to < source_len and md_to not in covered:
+        while md_to < len(self.markdown_source) and md_to not in covered:
             md_to += 1
-        return self._source_markdown[md_from:md_to]
+        return self.markdown_source[md_from:md_to]
+
+    def block_content(self, block_id: str) -> str | None:
+        return self.block_contents.get(block_id)
+
+
+class MarkdownRenderer:
+    """Reusable Markdown parser and Cocoa attributed-string renderer."""
+
+    def __init__(self) -> None:
+        self._parser = (
+            MarkdownIt().enable("table").use(dollarmath_plugin, allow_digits=True)
+        )
 
     def render(
         self,
         text: str,
         color,
         *,
+        expanded_block_ids: set[str] | frozenset[str] = frozenset(),
         math_bitmap_cache: MathBitmapCache | None = None,
         scale_factor: float | None = None,
-    ) -> NSMutableAttributedString:
+    ) -> tuple[NSMutableAttributedString, MarkdownDisplayMap]:
         source = text.rstrip()
-        self._source_markdown = source
-        self._source_map = []
         parse_source, display_math, anchors = _extract_display_math(source)
-        self._parse_source = parse_source
-        self._display_math = display_math
-        self._parse_anchors = anchors
+        expanded = set(expanded_block_ids)
         cache = math_bitmap_cache if math_bitmap_cache is not None else MathBitmapCache()
         backing_scale = scale_factor if scale_factor is not None else _backing_scale()
         tokens = self._parser.parse(parse_source)
-        self._blocks = {}
-        self.block_ranges = []
+        block_contents: dict[str, str] = {}
+        block_ranges: list[tuple[str, int, int]] = []
+        source_spans: list[tuple[int, int, int, int]] = []
         blocks: list[tuple[str, object, str | None, list]] = []
 
         i = 0
@@ -524,14 +513,26 @@ class MarkdownRenderer:
 
             if token.type in {"bullet_list_open", "ordered_list_open"}:
                 list_text, list_segments, i = self._render_list(
-                    tokens, i, color, math_bitmap_cache=cache, scale_factor=backing_scale
+                    tokens,
+                    i,
+                    color,
+                    parse_source=parse_source,
+                    anchors=anchors,
+                    math_bitmap_cache=cache,
+                    scale_factor=backing_scale,
                 )
                 blocks.append((token.type, list_text, None, list_segments))
                 continue
 
             if token.type in {"math_block", "math_block_label"}:
                 block, segments = self._render_math_block(
-                    token, color, math_bitmap_cache=cache, scale_factor=backing_scale
+                    token,
+                    color,
+                    display_math=display_math,
+                    parse_source=parse_source,
+                    anchors=anchors,
+                    math_bitmap_cache=cache,
+                    scale_factor=backing_scale,
                 )
                 blocks.append((token.type, block, None, segments))
                 i += 1
@@ -555,9 +556,17 @@ class MarkdownRenderer:
                     block,
                     (token.content or "").rstrip("\n"),
                     color,
+                    block_contents=block_contents,
+                    expanded_block_ids=expanded,
                     monospace=True,
                 )
-                segments = self._fence_segments(token, block.length())
+                segments = self._fence_segments(
+                    token,
+                    block.length(),
+                    source=source,
+                    parse_source=parse_source,
+                    anchors=anchors,
+                )
                 blocks.append((token.type, block, block_id, segments))
                 i += 1
                 continue
@@ -574,6 +583,8 @@ class MarkdownRenderer:
                     block,
                     "\n".join(content).strip(),
                     color.colorWithAlphaComponent_(0.75),
+                    block_contents=block_contents,
+                    expanded_block_ids=expanded,
                     monospace=False,
                 )
                 blocks.append((token.type, block, block_id, []))
@@ -608,8 +619,12 @@ class MarkdownRenderer:
                             font = NSFont.boldSystemFontOfSize_(size)
                         inline_token = tokens[i]
                         inline_content = inline_token.content or ""
-                        inline_md_start = self._source_line_start(
-                            inline_token.map[0] if inline_token.map else 0,
+                        inline_md_start = _map_parse_to_source(
+                            _md_line_start(
+                                parse_source,
+                                inline_token.map[0] if inline_token.map else 0,
+                            ),
+                            anchors,
                         )
                         inline_block, inline_segments = self._render_inline(
                             inline_token.children or [],
@@ -660,49 +675,70 @@ class MarkdownRenderer:
             base = result.length()
             result.appendAttributedString_(block)
             for rendered_start, rendered_end, md_start, md_end in segments:
-                self._source_map.append(
+                source_spans.append(
                     (base + rendered_start, base + rendered_end, md_start, md_end)
                 )
             if block_id is not None:
-                self.block_ranges.append((block_id, base, block.length()))
+                block_ranges.append((block_id, base, block.length()))
 
-        return result
+        display_map = MarkdownDisplayMap(
+            markdown_source=source,
+            source_spans=tuple(source_spans),
+            block_contents=block_contents,
+            block_ranges=tuple(block_ranges),
+        )
+        return result, display_map
 
-    def block_content(self, block_id: str) -> str | None:
-        return self._blocks.get(block_id)
-
-    def _fence_segments(self, token, rendered_length: int):
+    @staticmethod
+    def _fence_segments(
+        token,
+        rendered_length: int,
+        *,
+        source: str,
+        parse_source: str,
+        anchors: list[tuple[int, int]],
+    ):
         if not token.map or rendered_length <= 0:
             return []
         md_start, md_end = _md_line_range(
-            self._parse_source,
+            parse_source,
             token.map[0],
             token.map[1],
         )
-        md_start = self._source_pos(md_start)
-        md_end = self._source_pos(md_end)
+        md_start = _map_parse_to_source(md_start, anchors)
+        md_end = _map_parse_to_source(md_end, anchors)
         content = (token.content or "").rstrip("\n")
-        fence_start = self._source_markdown.find(content, md_start, md_end)
+        fence_start = source.find(content, md_start, md_end)
         if fence_start == -1:
             return [(0, rendered_length, md_start, md_end)]
         ui_end = min(rendered_length, len(content))
         return [(0, ui_end, fence_start, fence_start + ui_end)]
 
-    def _render_math_block(self, token, color, *, math_bitmap_cache, scale_factor):
+    @staticmethod
+    def _render_math_block(
+        token,
+        color,
+        *,
+        display_math,
+        parse_source,
+        anchors,
+        math_bitmap_cache,
+        scale_factor,
+    ):
         latex = (token.content or "").strip()
         placeholder = _DISPLAY_MATH_PLACEHOLDER_RE.match(latex)
         if placeholder is not None:
             index = int(placeholder.group(1))
-            latex, md_start, md_end = self._display_math[index]
+            latex, md_start, md_end = display_math[index]
             latex = latex.strip()
         else:
             md_start, md_end = _md_line_range(
-                self._parse_source,
+                parse_source,
                 token.map[0],
                 token.map[1],
             )
-            md_start = self._source_pos(md_start)
-            md_end = self._source_pos(md_end)
+            md_start = _map_parse_to_source(md_start, anchors)
+            md_end = _map_parse_to_source(md_end, anchors)
         block = NSMutableAttributedString.alloc().init()
         rendered_start = block.length()
         _, _, bitmap = _append_math_attachment(
@@ -726,12 +762,6 @@ class MarkdownRenderer:
         )
         segments = [(rendered_start, block.length(), md_start, md_end)]
         return block, segments
-
-    def toggle_block(self, block_id: str) -> None:
-        if block_id in self._expanded:
-            self._expanded.remove(block_id)
-        else:
-            self._expanded.add(block_id)
 
     @staticmethod
     def _has_following_list_item(tokens, start: int, close_type: str) -> bool:
@@ -762,7 +792,16 @@ class MarkdownRenderer:
         return style
 
     def _render_list(
-        self, tokens, start: int, color, depth: int = 0, *, math_bitmap_cache, scale_factor
+        self,
+        tokens,
+        start: int,
+        color,
+        depth: int = 0,
+        *,
+        parse_source,
+        anchors,
+        math_bitmap_cache,
+        scale_factor,
     ):
         font = NSFont.systemFontOfSize_(FONT_SIZE)
         result = NSMutableAttributedString.alloc().init()
@@ -821,8 +860,12 @@ class MarkdownRenderer:
                         if tokens[i].type == "inline":
                             inline_token = tokens[i]
                             inline_content = inline_token.content or ""
-                            inline_md_start = self._source_line_start(
-                                inline_token.map[0] if inline_token.map else 0,
+                            inline_md_start = _map_parse_to_source(
+                                _md_line_start(
+                                    parse_source,
+                                    inline_token.map[0] if inline_token.map else 0,
+                                ),
+                                anchors,
                             )
                             inline_block, inline_segments = self._render_inline(
                                 inline_token.children or [],
@@ -850,6 +893,8 @@ class MarkdownRenderer:
                         i,
                         color,
                         depth + 1,
+                        parse_source=parse_source,
+                        anchors=anchors,
                         math_bitmap_cache=math_bitmap_cache,
                         scale_factor=scale_factor,
                     )
@@ -1040,14 +1085,16 @@ class MarkdownRenderer:
         content: str,
         color,
         *,
+        block_contents: dict[str, str],
+        expanded_block_ids: set[str],
         monospace: bool,
     ) -> None:
         block_id = sha1(content.encode("utf-8")).hexdigest()[:12]
-        self._blocks[block_id] = content
+        block_contents[block_id] = content
         lines = content.splitlines() or [""]
         collapsed = (
             len(lines) > COLLAPSE_AFTER_LINES
-            and block_id not in self._expanded
+            and block_id not in expanded_block_ids
         )
         shown = "\n".join(lines[:COLLAPSE_PREVIEW_LINES]) if collapsed else content
         start = result.length()

@@ -22,6 +22,7 @@ from macagentic.ui.markdown import (
     LINE_HEIGHT,
     LIST_ITEM_SPACING,
     PARAGRAPH_GAP,
+    MarkdownDisplayMap,
     MarkdownRenderer,
 )
 
@@ -52,9 +53,14 @@ def _paragraph_styles(rendered):
     return styles
 
 
+def _render(renderer, *args, **kwargs):
+    rendered, _display_map = renderer.render(*args, **kwargs)
+    return rendered
+
+
 def test_markdown_renders_blocks_and_tables() -> None:
     renderer = MarkdownRenderer()
-    rendered = renderer.render(
+    rendered, display_map = renderer.render(
         "# Heading\n\n"
         "| A | B |\n|---|---|\n| 1 | 2 |\n\n"
         "```python\nprint('hello')\n```\n",
@@ -66,11 +72,12 @@ def test_markdown_renders_blocks_and_tables() -> None:
     assert "A" in text and "2" in text
     assert "print('hello')" in text
     assert "[copy]" in text
-    assert len(renderer.block_ranges) == 1
+    assert len(display_map.block_ranges) == 1
 
 
 def test_markdown_renders_status_as_subdued_plain_text() -> None:
-    rendered = MarkdownRenderer().render(
+    rendered = _render(
+        MarkdownRenderer(),
         "```status\nChecking calendar\n```\n\n"
         "```status\nReading event details\n```",
         NSColor.blackColor(),
@@ -90,7 +97,8 @@ def test_markdown_renders_status_as_subdued_plain_text() -> None:
 
 def test_markdown_lists_use_hanging_indents_and_spacing() -> None:
     renderer = MarkdownRenderer()
-    rendered = renderer.render(
+    rendered = _render(
+        renderer,
         "Intro\n\n"
         "- First item with enough text to wrap onto another line in the UI\n"
         "- Second item\n\n"
@@ -124,19 +132,23 @@ def test_markdown_uses_block_transition_spacing() -> None:
     renderer = MarkdownRenderer()
     color = NSColor.blackColor()
 
-    paragraph_heading = renderer.render(
+    paragraph_heading = _render(
+        renderer,
         "Intro\n\n## Heading",
         color,
     )
-    heading_paragraph = renderer.render(
+    heading_paragraph = _render(
+        renderer,
         "## Heading\n\nBody",
         color,
     )
-    list_heading = renderer.render(
+    list_heading = _render(
+        renderer,
         "- Item\n\n## Heading",
         color,
     )
-    paragraph_list = renderer.render(
+    paragraph_list = _render(
+        renderer,
         "Intro\n\n- Item",
         color,
     )
@@ -161,7 +173,8 @@ def test_markdown_uses_block_transition_spacing() -> None:
 
 def test_markdown_list_outer_and_internal_spacing() -> None:
     renderer = MarkdownRenderer()
-    rendered = renderer.render(
+    rendered = _render(
+        renderer,
         "Intro\n\n- One\n- Two\n- Three\n\nAfter",
         NSColor.blackColor(),
     )
@@ -176,7 +189,8 @@ def test_markdown_list_outer_and_internal_spacing() -> None:
 
 def test_markdown_heading_typography() -> None:
     renderer = MarkdownRenderer()
-    rendered = renderer.render(
+    rendered = _render(
+        renderer,
         "# Title\n\n## Section\n\n### Subsection",
         NSColor.blackColor(),
     )
@@ -202,7 +216,8 @@ def test_markdown_heading_typography() -> None:
 
 def test_markdown_heavy_block_layout() -> None:
     renderer = MarkdownRenderer()
-    rendered = renderer.render(
+    rendered = _render(
+        renderer,
         "Intro\n\n| A |\n|---|\n| 1 |",
         NSColor.blackColor(),
     )
@@ -224,11 +239,13 @@ def test_markdown_heavy_block_layout() -> None:
 
 def test_markdown_links_and_table_alignment() -> None:
     renderer = MarkdownRenderer()
-    links = renderer.render(
+    links = _render(
+        renderer,
         "Visit https://example.com or [docs](https://example.com/docs).",
         NSColor.blackColor(),
     )
-    table = renderer.render(
+    table = _render(
+        renderer,
         "| Name | Count |\n|---|---:|\n| A | 2 |\n| Longer | 10 |",
         NSColor.blackColor(),
     )
@@ -241,7 +258,12 @@ def test_markdown_renders_inline_and_block_math() -> None:
     renderer = MarkdownRenderer()
     cache = MathBitmapCache()
     source = "Energy $E=mc^2$ here\n\n$$\n24 \\times 576\n$$\n"
-    rendered = renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    rendered = _render(
+        renderer,
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=cache,
+    )
     text = str(rendered.string())
 
     assert "\ufffc" in text
@@ -255,11 +277,11 @@ def test_math_bitmap_cache_reuses_bitmaps() -> None:
     renderer = MarkdownRenderer()
     source = "Again $x^2$ and $x^2$"
 
-    renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    _render(renderer, source, NSColor.blackColor(), math_bitmap_cache=cache)
     assert len(cache) == 1
     first = next(iter(cache._entries.values()))
 
-    renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    _render(renderer, source, NSColor.blackColor(), math_bitmap_cache=cache)
     assert len(cache) == 1
     assert next(iter(cache._entries.values())) is first
 
@@ -268,7 +290,8 @@ def test_display_math_uses_tall_line_height() -> None:
     renderer = MarkdownRenderer()
     latex = r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}"
     source = f"$$\n{latex}\n$$"
-    rendered = renderer.render(
+    rendered = _render(
+        renderer,
         source,
         NSColor.blackColor(),
         math_bitmap_cache=MathBitmapCache(),
@@ -302,7 +325,8 @@ def test_markdown_math_render_failure_raises() -> None:
         side_effect=MathRenderError("bad math"),
     ):
         try:
-            renderer.render(
+            _render(
+                renderer,
                 "Bad $x^2$ math",
                 NSColor.blackColor(),
                 math_bitmap_cache=MathBitmapCache(),
@@ -316,7 +340,7 @@ def test_markdown_for_selection_preserves_math_markdown() -> None:
     renderer = MarkdownRenderer()
     cache = MathBitmapCache()
     source = "Before $x^2$ after"
-    rendered = renderer.render(
+    rendered, display_map = renderer.render(
         source,
         NSColor.blackColor(),
         math_bitmap_cache=cache,
@@ -324,13 +348,13 @@ def test_markdown_for_selection_preserves_math_markdown() -> None:
     text = str(rendered.string())
     math_index = text.index("\ufffc")
 
-    copied = renderer.markdown_for_selection((0, len(text)))
+    copied = display_map.markdown_for_range((0, len(text)))
     assert copied == source
 
-    copied_math = renderer.markdown_for_selection((math_index, 1))
+    copied_math = display_map.markdown_for_range((math_index, 1))
     assert copied_math == "$x^2$"
 
-    copied_mixed = renderer.markdown_for_selection((0, math_index + 1))
+    copied_mixed = display_map.markdown_for_range((0, math_index + 1))
     assert copied_mixed == "Before $x^2$"
 
 
@@ -348,14 +372,18 @@ def test_display_math_inside_list_with_plus_line_renders() -> None:
         r"\mu_0\varepsilon_0\frac{d}{dt}\int_S \mathbf{E}\cdot d\mathbf{A}"
         "\n$$\n"
     )
-    rendered = renderer.render(source, NSColor.blackColor(), math_bitmap_cache=cache)
+    rendered, display_map = renderer.render(
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=cache,
+    )
     text = str(rendered.string())
 
     assert "\ufffc" in text
     assert "$$" not in text
     assert r"\oint" not in text
     assert len(cache) == 1
-    assert renderer.markdown_for_selection((0, len(text))) == source.rstrip()
+    assert display_map.markdown_for_range((0, len(text))) == source.rstrip()
 
 
 def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
@@ -372,16 +400,88 @@ def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
         r"\oint \mathbf{B}\cdot d\mathbf{\ell} = \mu_0 I"
         "\n$$\n"
     )
-    rendered = renderer.render(
+    rendered, display_map = renderer.render(
         source,
         NSColor.blackColor(),
         math_bitmap_cache=MathBitmapCache(),
     )
     text = str(rendered.string())
-    copied = renderer.markdown_for_selection((0, len(text)))
+    copied = display_map.markdown_for_range((0, len(text)))
 
     assert copied == source.rstrip()
     assert "**You:**" in copied
     assert "**Ampère–Maxwell**\n\n$$" in copied
     assert "formMaxwell" not in copied.replace("\n", "")
     assert "Ampère–Maxwell$$" not in copied.replace("\n", "")
+
+
+def test_display_map_contains_only_python_metadata() -> None:
+    renderer = MarkdownRenderer()
+    source = "Before\n\n```\ncode\n```"
+    _rendered, display_map = renderer.render(source, NSColor.blackColor())
+
+    assert isinstance(display_map, MarkdownDisplayMap)
+    assert display_map.markdown_source == source
+    assert isinstance(display_map.source_spans, tuple)
+    assert isinstance(display_map.block_contents, dict)
+    assert isinstance(display_map.block_ranges, tuple)
+    assert all(
+        isinstance(value, (str, int))
+        for span in display_map.source_spans
+        for value in span
+    )
+    assert all(
+        isinstance(value, (str, int))
+        for block_range in display_map.block_ranges
+        for value in block_range
+    )
+
+
+def test_renderer_reuse_does_not_leak_display_state() -> None:
+    renderer = MarkdownRenderer()
+    first_source = "First\n\n```\nfirst block\n```"
+    _first_rendered, first_map = renderer.render(
+        first_source,
+        NSColor.blackColor(),
+    )
+    first_block_id = first_map.block_ranges[0][0]
+
+    second_source = "Second only"
+    _second_rendered, second_map = renderer.render(
+        second_source,
+        NSColor.blackColor(),
+    )
+
+    assert vars(renderer).keys() == {"_parser"}
+    assert first_map.markdown_source == first_source
+    assert first_map.block_content(first_block_id) == "first block"
+    assert second_map.markdown_source == second_source
+    assert second_map.block_ranges == ()
+    assert second_map.block_content(first_block_id) is None
+
+
+def test_expanded_block_ids_are_per_render_call() -> None:
+    renderer = MarkdownRenderer()
+    content = "\n".join(f"line {index}" for index in range(25))
+    source = f"```\n{content}\n```"
+
+    collapsed, collapsed_map = renderer.render(source, NSColor.blackColor())
+    block_id = collapsed_map.block_ranges[0][0]
+    expanded, expanded_map = renderer.render(
+        source,
+        NSColor.blackColor(),
+        expanded_block_ids={block_id},
+    )
+    collapsed_again, collapsed_again_map = renderer.render(
+        source,
+        NSColor.blackColor(),
+    )
+
+    assert "20 more lines" in str(collapsed.string())
+    assert "line 24" not in str(collapsed.string())
+    assert "line 24" in str(expanded.string())
+    assert "▾ collapse" in str(expanded.string())
+    assert "20 more lines" in str(collapsed_again.string())
+    assert "line 24" not in str(collapsed_again.string())
+    assert expanded_map.block_content(block_id) == content
+    assert collapsed_again_map.block_content(block_id) == content

@@ -308,8 +308,7 @@ class Agent:
             try:
                 response = self.model.query(messages)
                 responses.append(response)
-                if self.usage.add_response(response) is not None:
-                    self.update_ui()
+                self.usage.add_response(response)
             except BaseException as error:
                 errors.append(error)
             finally:

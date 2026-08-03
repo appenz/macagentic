@@ -86,6 +86,11 @@ remain relative to the agent root.
 User input → model-tier slash commands → skill expansion → model call → tool
 execution → observation → repeat or return.
 
+For each successful model call, the Agent records usage before appending the
+response to `messages` and `conversation_log`. Appending the response requests
+the UI update; usage accounting does not request an additional update. The
+single resulting render therefore includes both the response and its usage.
+
 `/fast`, `/medium`, and `/slow` are stripped from user input like skill
 commands. The last matching tier overwrites the agent's model string using
 `model_presets`. A `model_switch` conversation-log event is appended only for

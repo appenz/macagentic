@@ -68,29 +68,72 @@ The log grows with its content until the window reaches 90% of screen height, th
 Each Cocoa tab owns:
 
 ```python
-@dataclass
 class UITab:
-    # Identity and conversation
-    id: int
-    agent: Agent
-
-    # Display state
-    title: str = "New Agent"
-    input_text: str = ""
-    tool_call_descriptions: dict[str, str] = field(default_factory=dict)
-    log_render_index: int = 0
-    math_bitmap_cache: MathBitmapCache = field(default_factory=MathBitmapCache)
-
-    # Execution
-    thread: threading.Thread | None = None
-    requests: queue.Queue[str] = field(default_factory=queue.Queue)
+    def __init__(
+        self,
+        tab_id: int,
+        agent: Agent,
+        *,
+        title: str = "New Agent",
+        input_text: str = "",
+    ) -> None:
+        self.id = tab_id
+        self.agent = agent
+        self.title = title
+        self.input_text = input_text
+        self.tool_call_descriptions: dict[str, str] = {}
+        self.display_event_index = 0
+        self.math_bitmap_cache = MathBitmapCache()
+        self.expanded_block_ids: set[str] = set()
+        self.tab_bar_item: TabBarItemView | None = None
+        self.content_view: TabContentView | None = None
+        self.thread: threading.Thread | None = None
+        self.requests: queue.Queue[str] = queue.Queue()
 
     def running(self) -> bool: ...
 ```
 
-Each tab uses its Agent's process-local ID. Agent workers retain the tab ID,
-Agent, and request queue; display workers retain only IDs and immutable event
-data. Workers never retain the `UITab` object.
+`UITab` is a regular mutable class, not a dataclass. It is a long-lived UI
+object with persistent Cocoa view identity and changing execution and display
+state. Each tab uses its Agent's process-local ID.
+
+`TabBarItemView` owns the persistent Cocoa controls for one tab-bar item:
+
+```python
+class TabBarItemView(NSView):
+    tab_id: int
+    title_label: NSTextField
+    close_button: NSView
+    active_background: NSBox
+
+    def set_title(self, title: str, *, running: bool) -> None: ...
+    def set_active(self, active: bool) -> None: ...
+```
+
+`TabContentView` owns all Cocoa controls and interaction metadata for one tab's
+status, transcript, and input areas:
+
+```python
+class TabContentView(NSView):
+    status_view: NSTextView
+    transcript_scroll: NSScrollView
+    transcript_view: ConversationTextView
+    input_scroll: NSScrollView
+    input_text_view: NSTextView
+    input_delegate: InputDelegate
+    conversation_delegate: ConversationDelegate
+    markdown_display_map: MarkdownDisplayMap | None
+    focused_block: int
+
+    def set_status(self, agent: Agent) -> None: ...
+    def set_transcript(
+        self,
+        cocoa_text: NSMutableAttributedString,
+        markdown_display_map: MarkdownDisplayMap,
+    ) -> None: ...
+    def input_text(self) -> str: ...
+    def clear_input(self) -> None: ...
+```
 
 ## UI Updates
 
@@ -119,15 +162,19 @@ UIUpdate = SetTabTitle | SetToolCallDescription | AgentThreadCompleted
 
 ## Cocoa UI Class
 
-`MacAgenticUI` is the top-level Cocoa application and owns all tabs, windows,
-rendering, display state, and UI helper work:
+`MacAgenticUI` is the top-level Cocoa application. It owns the persistent
+window shell, shared renderer, tab collection, update routing, and UI helper
+work. Per-tab Cocoa controls and interaction state belong to each `UITab`:
 
 ```python
 class MacAgenticUI:
-    # Cocoa views and rendering
+    # Persistent window shell
     window: NSWindow | None
-    input_field: NSTextView | None
-    text_view: NSTextView | None
+    root_view: NSBox | None
+    tab_bar_container: NSView | None
+    tab_content_container: NSView | None
+
+    # Shared rendering service and update bridge
     renderer: MarkdownRenderer
     bridge: MainThreadBridge  # Dispatches Cocoa work to AppKit's main thread.
     update_queue: queue.Queue[UIUpdate]
@@ -135,7 +182,6 @@ class MacAgenticUI:
     # Tab state
     tabs: list[UITab]
     active_index: int
-    focused_block: int
 
     def __init__(
         self,
@@ -144,6 +190,9 @@ class MacAgenticUI:
 
     @property
     def active_tab(self) -> UITab: ...
+
+    @property
+    def active_content_view(self) -> TabContentView | None: ...
 
     def start(self, *, dont_run_app: bool = False) -> None: ...
     def update(self) -> None: ...
@@ -164,20 +213,82 @@ class MacAgenticUI:
 The Model menu lists Fast / Medium / Slow with configured model names and
 template icons from `macagentic/ui/assets/model_*.png`.
 
+The window shell, tab-bar container, and tab-content container are created once.
+Each tab's `TabContentView` and `TabBarItemView` are created lazily and retained
+by that tab. Switching tabs hides the outgoing content view and shows the
+incoming view; it does not detach or recreate either tab's controls. Closing
+the application window orders the persistent window out and reopening orders
+the same window and controls back in.
 
-`update()` may be called from any thread. It asks the bridge to schedule a
-main-thread update. UI workers call `post_update()` to append an immutable event
-to `update_queue` before scheduling the same update.
+
+`update()` may be called from the main thread or a tab's orchestration thread.
+Main-thread calls belong to the active tab. Worker-thread calls are matched to
+the `UITab` whose `thread` is the caller, and the tab ID is passed through the
+bridge to the main thread. Calls from unmatched threads are ignored. In
+particular, usage accounting does not request an update from the nested model
+query thread; the subsequent response append on the tab thread renders both the
+response and its already-recorded usage.
+
+Updates attributed to the active tab process its new conversation-log entries
+and update that tab's existing Cocoa controls. Updates attributed to an
+inactive tab do not process its deferred display work or mutate any content
+view. When the user switches tabs, the newly active tab processes its deferred
+entries before its persistent content view is shown.
+
+UI helpers call `post_update()` to append an immutable event to `update_queue`
+and schedule an event-only main-thread pass. `SetToolCallDescription` is stored
+for every existing tab but triggers a full render only for the active tab.
+`SetTabTitle` and `AgentThreadCompleted` update the matching visible title label
+through `UITab.tab_bar_item` in place, including its running indicator, without
+rebuilding the window or content views.
 
 On AppKit's main thread, the UI drains `update_queue`, discards events whose tab
-or operation no longer exists, processes new conversation-log entries, applies
-display-state changes, and renders. Only the main thread mutates tabs, so no tab
-lock is needed.
+or operation no longer exists, and applies the scoped behavior above. Only the
+main thread mutates tabs, so no tab lock is needed.
 
 Each running tab has one agent orchestration thread consuming its `requests`
 queue. The worker posts a completion event instead of changing tab state
 directly. Closing a tab removes it, interrupts its agent, and saves its complete
 conversation log; later events for that tab are harmlessly discarded.
+
+Every tab owns its own persistent `input_text_view`. Switching tabs therefore
+changes which complete `TabContentView` is visible; input text, selection, undo
+state, and first-responder identity do not migrate between tabs. `UITab.input_text`
+is synchronized from that view for session persistence and initializes the
+view when a restored tab is first mounted.
+
+The shared `MarkdownRenderer` retains only its parser/configuration. A render
+returns the Cocoa attributed string plus a document-specific
+`MarkdownDisplayMap`. The map belongs to the tab content view and contains no
+Cocoa objects:
+
+```python
+@dataclass(frozen=True)
+class MarkdownDisplayMap:
+    markdown_source: str
+    source_spans: tuple[tuple[int, int, int, int], ...]
+    block_contents: Mapping[str, str]
+    block_ranges: tuple[tuple[str, int, int], ...]
+
+    def markdown_for_range(self, char_range: tuple[int, int]) -> str: ...
+    def block_content(self, block_id: str) -> str | None: ...
+
+
+class MarkdownRenderer:
+    def render(
+        self,
+        markdown: str,
+        color: NSColor,
+        *,
+        expanded_block_ids: set[str],
+        math_bitmap_cache: MathBitmapCache,
+        scale_factor: float,
+    ) -> tuple[NSMutableAttributedString, MarkdownDisplayMap]: ...
+```
+
+Copy, collapsible-block links, and keyboard block focus resolve against the
+active `TabContentView.markdown_display_map`; the shared renderer has no
+selection, block-focus, expansion, or last-document state.
 
 ## Async Display Work
 

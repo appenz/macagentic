@@ -17,8 +17,8 @@ the copy source map. `core.py` does not import `math_render`.
   CommonMark lists cannot split display math (e.g. a lone `+` line).
 - Render failure raises; there is no monospace fallback.
 - WebKit rasterization is single-flight on the AppKit main thread.
-- Copy uses `markdown_for_selection` only — never attachment attributes or
-  `math_render`.
+- Copy uses the current `MarkdownDisplayMap.markdown_for_range()` only — never
+  attachment attributes or `math_render`.
 
 ## Math Render API
 
@@ -49,25 +49,35 @@ the AppKit main thread.
 ## Markdown Integration
 
 ```python
+@dataclass(frozen=True)
+class MarkdownDisplayMap:
+    markdown_source: str
+    source_spans: tuple[tuple[int, int, int, int], ...]
+
+    def markdown_for_range(self, char_range: tuple[int, int]) -> str: ...
+
+
 class MarkdownRenderer:
     def render(
         self,
         text: str,
         color,
         *,
+        expanded_block_ids: set[str],
         math_bitmap_cache: MathBitmapCache,
-    ) -> NSMutableAttributedString: ...
-
-    def markdown_for_selection(self, char_range: tuple[int, int]) -> str: ...
+        scale_factor: float,
+    ) -> tuple[NSMutableAttributedString, MarkdownDisplayMap]: ...
 ```
 
 `render` parses with `dollarmath_plugin` (`allow_digits=True`) and handles
 `math_inline`, `math_block`, and `math_block_label`. Math size follows the
 surrounding font; pass window backing scale as `scale_factor`.
 
-`markdown_for_selection` returns a contiguous substring of the last rendered
-source Markdown (including unmapped characters between mapped spans). Do not
-reconstruct by concatenating mapped fragments.
+`MarkdownRenderer` is shared and retains no document state. The returned
+`MarkdownDisplayMap` belongs to the tab content view.
+`MarkdownDisplayMap.markdown_for_range()` returns a contiguous substring of
+that map's source Markdown (including unmapped characters between mapped
+spans). Do not reconstruct by concatenating mapped fragments.
 
 `ConversationTextView.copy_` writes that Markdown to the pasteboard. A math
 attachment is one atomic character.

@@ -23,8 +23,8 @@ def run_ui(*, initial_task: str | None = None) -> None:
             )
             tabs.append(
                 UITab(
-                    id=agent.id,
-                    agent=agent,
+                    agent.id,
+                    agent,
                     title=saved_tab.title,
                     input_text=saved_tab.input_text,
                 )

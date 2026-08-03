@@ -30,12 +30,13 @@ class UITestDriver:
         self.ui = ui
 
     def type_text(self, text: str) -> None:
-        self.ui.input_field.insertText_(text)
+        self.ui.active_content_view.input_text_view.insertText_(text)
         self.spin()
 
     def press_return(self) -> None:
-        self.ui.input_delegate.textView_doCommandBySelector_(
-            self.ui.input_field,
+        content = self.ui.active_content_view
+        content.input_delegate.textView_doCommandBySelector_(
+            content.input_text_view,
             "insertNewline:",
         )
         self.spin()
@@ -43,7 +44,8 @@ class UITestDriver:
     def press_cmd(self, key: str) -> None:
         key = key.lower()
         key_code = _COMMAND_KEY_CODES[key]
-        self.ui.window.makeFirstResponder_(self.ui.input_field)
+        input_view = self.ui.active_content_view.input_text_view
+        self.ui.window.makeFirstResponder_(input_view)
         for event_type in (NSKeyDown, NSKeyUp):
             event = NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
                 event_type,
@@ -64,12 +66,13 @@ class UITestDriver:
         self.spin()
 
     def input_text(self) -> str:
-        return str(self.ui.input_field.string())
+        return self.ui.active_content_view.input_text()
 
     def conversation_text(self) -> str:
-        if self.ui.text_view is None:
+        content = self.ui.active_content_view
+        if content is None:
             return ""
-        return str(self.ui.text_view.string())
+        return str(content.transcript_view.string())
 
     def tab_count(self) -> int:
         return len(self.ui.tabs)

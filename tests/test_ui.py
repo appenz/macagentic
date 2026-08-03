@@ -8,7 +8,7 @@ pytest.importorskip("Cocoa", reason="Cocoa UI requires macOS")
 from macagentic.agent import ConversationLog, UsageTracker
 from macagentic.ui.projection import render_history
 from macagentic.ui.testing import UITestDriver
-from macagentic.ui.updates import SetTabTitle
+from macagentic.ui.updates import SetTabTitle, SetToolCallDescription
 
 
 class FakeAgent:
@@ -67,6 +67,23 @@ class FakeAgent:
 
     def interrupt(self) -> None:
         self.interrupted = True
+
+
+def open_test_ui(monkeypatch):
+    from macagentic.ui.core import MacAgenticUI
+
+    monkeypatch.setattr(
+        "macagentic.ui.core.app.create_agent",
+        FakeAgent,
+    )
+    monkeypatch.setattr(
+        "macagentic.ui.core.request_fast_text",
+        lambda **_kwargs: None,
+    )
+    ui = MacAgenticUI(FakeAgent())
+    ui.start(dont_run_app=True)
+    ui.hotkey_pressed(activate=False)
+    return ui, UITestDriver(ui)
 
 
 @pytest.mark.uitest
@@ -141,23 +158,180 @@ def test_ui_passively_renders_conversation_log(monkeypatch) -> None:
     ui.active_tab.thread = None
 
     ui.close_window()
-    assert ui.window is None
+    retained_window = ui.window
+    assert not ui.window_is_visible()
     ui.app_delegate.applicationShouldHandleReopen_hasVisibleWindows_(
         None,
         False,
     )
-    assert ui.window is not None
+    assert ui.window is retained_window
+    assert ui.window_is_visible()
 
     ui.hotkey_pressed(activate=False)
-    assert ui.window is None
+    assert not ui.window_is_visible()
     ui.hotkey_pressed(activate=False)
-    assert ui.window is not None
+    assert ui.window is retained_window
+    assert ui.window_is_visible()
     ui.close_window()
     expected_history = render_history(
         ui.active_tab.agent.conversation_log.snapshot()
     )
     ui.close_tab(0)
     assert saved == [(Path.cwd(), expected_history)]
+
+
+@pytest.mark.uitest
+def test_tab_drafts_remain_with_their_tabs(monkeypatch) -> None:
+    ui, driver = open_test_ui(monkeypatch)
+    first_content = ui.active_tab.content_view
+    first_input = first_content.input_text_view
+    assert (
+        ui.active_tab.tab_bar_item.active_background.frame().origin.y
+        == -ui.padding
+    )
+
+    driver.type_text("first tab draft")
+    ui.new_tab()
+    second_content = ui.active_tab.content_view
+    second_input = second_content.input_text_view
+    assert driver.input_text() == ""
+    assert first_content is not second_content
+    assert first_input is not second_input
+
+    driver.type_text("second tab draft")
+    ui.switch_tab(0)
+    assert driver.input_text() == "first tab draft"
+    assert ui.active_tab.input_text == "first tab draft"
+    assert ui.active_content_view is first_content
+    assert ui.input_field is first_input
+
+    ui.switch_tab(1)
+    assert driver.input_text() == "second tab draft"
+    assert ui.active_tab.input_text == "second tab draft"
+    assert ui.active_content_view is second_content
+    assert ui.input_field is second_input
+    ui.close_window()
+
+
+@pytest.mark.uitest
+def test_inactive_tab_updates_preserve_visible_selection(monkeypatch) -> None:
+    ui, driver = open_test_ui(monkeypatch)
+    visible_tab = ui.active_tab
+    visible_tab.agent.conversation_log.append(
+        "user_input",
+        {"content": "Keep this selected"},
+    )
+    ui._main_thread_update(visible_tab.id)
+    ui.new_tab()
+    hidden_tab = ui.active_tab
+    ui.switch_tab(0)
+
+    selected = (0, 4)
+    ui.text_view.setSelectedRange_(selected)
+    visible_view = ui.text_view
+    visible_text = driver.conversation_text()
+
+    def update_hidden_tab() -> None:
+        hidden_tab.thread = threading.current_thread()
+        hidden_tab.agent.ui.update()
+
+    worker = threading.Thread(target=update_hidden_tab)
+    worker.start()
+    worker.join()
+    driver.spin()
+
+    assert ui.text_view is visible_view
+    assert driver.conversation_text() == visible_text
+    selection = ui.text_view.selectedRange()
+    assert (selection.location, selection.length) == selected
+
+    ui.post_update(SetTabTitle(hidden_tab.id, "Background title"))
+    assert str(hidden_tab.tab_bar_item.title_label.stringValue()) == (
+        "Background title"
+    )
+    assert ui.text_view is visible_view
+
+    ui.post_update(
+        SetToolCallDescription(hidden_tab.id, "call-1", "Background work")
+    )
+    assert ui.text_view is visible_view
+    ui.close_window()
+
+
+def test_main_thread_update_renders_only_the_active_tab(monkeypatch) -> None:
+    from macagentic.ui.core import MacAgenticUI
+
+    monkeypatch.setattr(
+        "macagentic.ui.core.app.create_agent",
+        FakeAgent,
+    )
+    ui = MacAgenticUI(FakeAgent())
+    ui.new_tab()
+    hidden_tab = ui.tabs[0]
+    active_tab = ui.tabs[1]
+    ui.window = object()
+    monkeypatch.setattr(ui, "window_is_visible", lambda: True)
+    rendered = []
+    display_work = []
+    monkeypatch.setattr(ui, "_render_window", lambda: rendered.append(True))
+    monkeypatch.setattr(
+        ui,
+        "_process_new_display_events",
+        lambda tab: display_work.append(tab.id),
+    )
+    monkeypatch.setattr(ui, "_refresh_tab_title", lambda _tab_id: None)
+
+    ui._main_thread_update(hidden_tab.id)
+    assert rendered == []
+    assert display_work == []
+
+    ui._main_thread_update(active_tab.id)
+    assert rendered == [True]
+    assert display_work == [active_tab.id]
+
+    ui.update_queue.put(
+        SetToolCallDescription(hidden_tab.id, "call-1", "Hidden work")
+    )
+    ui._main_thread_update()
+    assert rendered == [True]
+
+    ui.update_queue.put(
+        SetToolCallDescription(active_tab.id, "call-2", "Visible work")
+    )
+    ui._main_thread_update()
+    assert rendered == [True, True]
+
+
+def test_update_resolves_registered_worker_thread(monkeypatch) -> None:
+    from macagentic.ui.core import MacAgenticUI
+
+    monkeypatch.setattr(
+        "macagentic.ui.core.app.create_agent",
+        FakeAgent,
+    )
+    ui = MacAgenticUI(FakeAgent())
+    ui.new_tab()
+    scheduled = []
+    monkeypatch.setattr(
+        ui,
+        "_schedule_main_thread_update",
+        scheduled.append,
+    )
+
+    def update_from(tab=None) -> None:
+        if tab is not None:
+            tab.thread = threading.current_thread()
+        ui.update()
+
+    registered = threading.Thread(target=update_from, args=(ui.tabs[0],))
+    registered.start()
+    registered.join()
+    assert scheduled == [ui.tabs[0].id]
+
+    unknown = threading.Thread(target=update_from)
+    unknown.start()
+    unknown.join()
+    assert scheduled == [ui.tabs[0].id]
 
 
 def test_closed_tab_discards_async_update(monkeypatch) -> None:

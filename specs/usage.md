@@ -26,4 +26,10 @@ Input: 12,345 / Cached: 8,192
 Writes: 4,096 / Output: 1,024
 ```
 
+Usage accounting does not trigger a separate UI update. When a model response
+arrives, the Agent records its usage before appending the response to the
+conversation. The conversation update then renders both the response and the
+already-updated usage totals. Intermediate tool-loop responses follow the same
+ordering.
+
 Usage is session-only metadata. It is never written to the Markdown transcript.

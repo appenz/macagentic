@@ -3,7 +3,6 @@ from __future__ import annotations
 import queue
 import signal
 import threading
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import objc
@@ -57,7 +56,11 @@ from macagentic.history import save_history
 from macagentic.session import SavedSession, SavedTab, save_session as write_session
 from macagentic.ui.helpers import request_fast_text
 from macagentic.ui.math_render import MathBitmapCache
-from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
+from macagentic.ui.markdown import (
+    FONT_SIZE,
+    MarkdownDisplayMap,
+    MarkdownRenderer,
+)
 from macagentic.ui.projection import (
     display_model_name,
     render_conversation,
@@ -143,26 +146,92 @@ class QuickPanel(NSPanel):
         return objc.super(QuickPanel, self).performKeyEquivalent_(event)
 
 
-class ClickableTab(NSView):
+class TabCloseView(NSView):
     ui = None
-    index = -1
+    tab_id = -1
 
     def mouseDown_(self, _event):
         if self.ui is not None:
-            self.ui.switch_tab(self.index)
+            self.ui.close_tab_by_id(self.tab_id)
 
 
-class CloseTab(NSView):
+class TabBarItemView(NSView):
     ui = None
-    index = -1
+    tab_id = -1
+    title_label = None
+    close_button = None
+    active_background = None
+
+    @objc.python_method
+    def configure(self, ui, tab_id: int) -> None:
+        self.ui = ui
+        self.tab_id = tab_id
+
+        background = NSBox.alloc().initWithFrame_(((0, 0), (1, 1)))
+        background.setBoxType_(NSBoxCustom)
+        background.setBorderType_(NSNoBorder)
+        background.setCornerRadius_(4.0)
+        background.setFillColor_(NSColor.whiteColor())
+        background.setHidden_(True)
+        self.addSubview_(background)
+        self.active_background = background
+
+        label = NSTextField.alloc().initWithFrame_(((0, 0), (1, 1)))
+        label.setEditable_(False)
+        label.setSelectable_(False)
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setAlignment_(1)
+        label.setFont_(NSFont.systemFontOfSize_(11.0))
+        self.addSubview_(label)
+        self.title_label = label
+
+        close = TabCloseView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        close.ui = ui
+        close.tab_id = tab_id
+        close_label = NSTextField.alloc().initWithFrame_(((0, 0), (1, 1)))
+        close_label.setStringValue_("×")
+        close_label.setEditable_(False)
+        close_label.setSelectable_(False)
+        close_label.setBezeled_(False)
+        close_label.setDrawsBackground_(False)
+        close_label.setAlignment_(1)
+        close.addSubview_(close_label)
+        close.close_label = close_label
+        self.addSubview_(close)
+        self.close_button = close
+
+    @objc.python_method
+    def set_title(self, title: str, *, running: bool) -> None:
+        value = f"⟳ {title}" if running else title
+        self.title_label.setStringValue_(value)
+
+    @objc.python_method
+    def set_active(self, active: bool) -> None:
+        self.active_background.setHidden_(not active)
+        self.title_label.setTextColor_(
+            NSColor.blackColor()
+            if active
+            else NSColor.colorWithCalibratedWhite_alpha_(0.4, 1.0)
+        )
+
+    @objc.python_method
+    def layout(self, width: float, height: float, overlap: float) -> None:
+        self.active_background.setFrame_(
+            ((0, -overlap), (width, height + overlap))
+        )
+        self.title_label.setFrame_(((6, 0), (width - 28, height)))
+        self.close_button.setFrame_(((width - 18, 0), (16, height)))
+        self.close_button.close_label.setFrame_(((0, 0), (16, height)))
 
     def mouseDown_(self, _event):
         if self.ui is not None:
-            self.ui.close_tab(self.index)
+            self.ui.switch_tab_by_id(self.tab_id)
 
 
 class ConversationTextView(NSTextView):
     ui = None
+    content_view = None
 
     def keyDown_(self, event):
         characters = str(event.charactersIgnoringModifiers() or "")
@@ -179,14 +248,19 @@ class ConversationTextView(NSTextView):
         objc.super(ConversationTextView, self).keyDown_(event)
 
     def copy_(self, _sender):
-        if self.ui is None or self.ui.renderer is None:
+        display_map = (
+            self.content_view.markdown_display_map
+            if self.content_view is not None
+            else None
+        )
+        if display_map is None:
             objc.super(ConversationTextView, self).copy_(None)
             return
         selected = self.selectedRange()
         if selected.length == 0:
             objc.super(ConversationTextView, self).copy_(None)
             return
-        markdown = self.ui.renderer.markdown_for_selection(
+        markdown = display_map.markdown_for_range(
             (selected.location, selected.length)
         )
         pasteboard = NSPasteboard.generalPasteboard()
@@ -292,15 +366,294 @@ class ConversationDelegate(NSObject):
         except Exception:
             return False
 
+
+class TabContentView(NSView):
+    ui = None
+    tab_id = -1
+    status_box = None
+    status_view = None
+    transcript_box = None
+    transcript_scroll = None
+    transcript_view = None
+    input_box = None
+    input_scroll = None
+    input_text_view = None
+    input_delegate = None
+    conversation_delegate = None
+    markdown_display_map: MarkdownDisplayMap | None = None
+    focused_block = -1
+
+    @objc.python_method
+    def configure(self, ui, tab_id: int, input_text: str) -> None:
+        self.ui = ui
+        self.tab_id = tab_id
+        self.markdown_display_map = None
+        self.focused_block = -1
+
+        status_box = NSBox.alloc().initWithFrame_(((0, 0), (1, 1)))
+        status_box.setBoxType_(NSBoxCustom)
+        status_box.setBorderType_(NSNoBorder)
+        status_box.setCornerRadius_(ui.text_corner_radius)
+        status_box.setFillColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(0.8, 1.0)
+        )
+        self.addSubview_(status_box)
+        self.status_box = status_box
+
+        image = NSImageView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        image.setImage_(ui.logo)
+        image.setImageScaling_(3)
+        status_box.addSubview_(image)
+        self.status_icon = image
+
+        status_view = NSTextView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        status_view.setEditable_(False)
+        status_view.setSelectable_(False)
+        status_view.setDrawsBackground_(False)
+        status_view.setTextContainerInset_((0.0, 0.0))
+        status_box.addSubview_(status_view)
+        self.status_view = status_view
+
+        transcript_box = NSBox.alloc().initWithFrame_(((0, 0), (1, 1)))
+        transcript_box.setBoxType_(NSBoxCustom)
+        transcript_box.setBorderType_(NSNoBorder)
+        transcript_box.setCornerRadius_(ui.text_corner_radius)
+        transcript_box.setFillColor_(NSColor.whiteColor())
+        transcript_box.setHidden_(True)
+        self.addSubview_(transcript_box)
+        self.transcript_box = transcript_box
+
+        transcript_scroll = NSScrollView.alloc().initWithFrame_(
+            ((0, 0), (1, 1))
+        )
+        transcript_scroll.setHasHorizontalScroller_(False)
+        transcript_box.addSubview_(transcript_scroll)
+        self.transcript_scroll = transcript_scroll
+
+        transcript_view = ConversationTextView.alloc().initWithFrame_(
+            ((0, 0), (1, 1))
+        )
+        transcript_view.ui = ui
+        transcript_view.content_view = self
+        transcript_view.setEditable_(False)
+        transcript_view.setSelectable_(True)
+        transcript_view.setDrawsBackground_(False)
+        transcript_view.setLinkTextAttributes_({})
+        transcript_view.setVerticallyResizable_(True)
+        transcript_view.setHorizontallyResizable_(False)
+        transcript_view.textContainer().setWidthTracksTextView_(True)
+        transcript_view.textContainer().setLineFragmentPadding_(0)
+        conversation_delegate = ConversationDelegate.alloc().init()
+        conversation_delegate.ui = ui
+        transcript_view.setDelegate_(conversation_delegate)
+        transcript_scroll.setDocumentView_(transcript_view)
+        self.transcript_view = transcript_view
+        self.conversation_delegate = conversation_delegate
+
+        input_box = NSBox.alloc().initWithFrame_(((0, 0), (1, 1)))
+        input_box.setBoxType_(NSBoxCustom)
+        input_box.setBorderType_(NSNoBorder)
+        input_box.setCornerRadius_(ui.text_corner_radius)
+        input_box.setFillColor_(NSColor.whiteColor())
+        self.addSubview_(input_box)
+        self.input_box = input_box
+
+        input_scroll = NSScrollView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        input_scroll.setHasVerticalScroller_(False)
+        input_box.addSubview_(input_scroll)
+        self.input_scroll = input_scroll
+
+        input_view = NSTextView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        input_view.setString_(input_text)
+        input_view.setFont_(NSFont.systemFontOfSize_(FONT_SIZE))
+        input_view.setDrawsBackground_(False)
+        input_view.setAutomaticQuoteSubstitutionEnabled_(False)
+        input_view.setAutomaticDashSubstitutionEnabled_(False)
+        input_view.setSelectedRange_((len(input_text), 0))
+        input_delegate = InputDelegate.alloc().initWithUI_textView_(ui, input_view)
+        input_scroll.setDocumentView_(input_view)
+        self.input_text_view = input_view
+        self.input_delegate = input_delegate
+
+    @objc.python_method
+    def set_status(self, agent: Agent) -> None:
+        snapshot = agent.usage.snapshot()
+        model = display_model_name(agent.model_name)
+        line1 = f"{model} / ${snapshot.cost:.2f}"
+        line2 = (
+            f"Input: {snapshot.input_tokens:,} / "
+            f"Cached: {snapshot.cached_input_tokens:,}"
+        )
+        line3 = (
+            f"Writes: {snapshot.cache_write_tokens:,} / "
+            f"Output: {snapshot.output_tokens:,}"
+        )
+        status = f"{line1}\n{line2}\n{line3}"
+        self.status_view.setString_(status)
+
+        paragraph = NSMutableParagraphStyle.alloc().init()
+        paragraph.setAlignment_(2)
+        first_line_attributes = {
+            NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
+            NSForegroundColorAttributeName: (
+                NSColor.colorWithCalibratedWhite_alpha_(0.45, 1.0)
+            ),
+            NSParagraphStyleAttributeName: paragraph,
+        }
+        detail_attributes = {
+            NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
+            NSForegroundColorAttributeName: (
+                NSColor.colorWithCalibratedWhite_alpha_(0.6, 1.0)
+            ),
+            NSParagraphStyleAttributeName: paragraph,
+        }
+        attributed = NSMutableAttributedString.alloc().initWithString_(status)
+        attributed.addAttributes_range_(
+            first_line_attributes,
+            (0, len(line1)),
+        )
+        attributed.addAttributes_range_(
+            detail_attributes,
+            (len(line1), len(status) - len(line1)),
+        )
+        self.status_view.textStorage().setAttributedString_(attributed)
+
+    @objc.python_method
+    def set_transcript(
+        self,
+        cocoa_text,
+        markdown_display_map: MarkdownDisplayMap,
+    ) -> None:
+        selected = self.transcript_view.selectedRange()
+        clip = self.transcript_scroll.contentView()
+        origin = clip.bounds().origin
+        document_height = self.transcript_view.frame().size.height
+        visible_height = clip.bounds().size.height
+        at_bottom = origin.y + visible_height >= document_height - 2
+
+        self.transcript_view.textStorage().setAttributedString_(cocoa_text)
+        length = self.transcript_view.textStorage().length()
+        location = min(selected.location, length)
+        selection_length = min(selected.length, length - location)
+        self.transcript_view.setSelectedRange_((location, selection_length))
+        self.markdown_display_map = markdown_display_map
+        self._saved_scroll_origin = origin
+        self._scroll_to_end = at_bottom and selected.length == 0
+
+    @objc.python_method
+    def layout_content(
+        self,
+        *,
+        root_size,
+        top_y: float,
+        main_y: float,
+        main_height: float,
+        has_content: bool,
+    ) -> None:
+        ui = self.ui
+        self.setFrame_(((0, 0), root_size))
+        self.status_box.setFrame_(
+            (
+                (ui.content_x, top_y),
+                (ui.content_width, ui.top_bar_height),
+            )
+        )
+        icon_y = int((ui.top_bar_height - ui.icon_width) / 2) - 5
+        self.status_icon.setFrame_(
+            ((0, icon_y), (ui.icon_width, ui.icon_width))
+        )
+        text_width = 240
+        self.status_view.setFrame_(
+            (
+                (ui.content_width - text_width - 8, icon_y),
+                (text_width, ui.top_bar_height - icon_y - 10),
+            )
+        )
+
+        self.input_box.setFrame_(
+            (
+                (ui.content_x, ui.padding),
+                (ui.content_width, ui.input_height),
+            )
+        )
+        input_size = (
+            ui.content_width - 2 * ui.text_corner_radius,
+            ui.input_height - 2 * ui.text_corner_radius,
+        )
+        self.input_scroll.setFrame_(
+            ((ui.textbox_x_fudge, ui.textbox_y_fudge), input_size)
+        )
+        self.input_text_view.setFrame_(((0, 0), input_size))
+
+        self.transcript_box.setHidden_(not has_content)
+        if not has_content:
+            return
+        self.transcript_box.setFrame_(
+            ((ui.content_x, main_y), (ui.content_width, main_height))
+        )
+        scroll_size = (
+            ui.content_width - 2 * ui.text_corner_radius,
+            main_height - 2 * ui.text_corner_radius,
+        )
+        self.transcript_scroll.setFrame_(
+            ((0, ui.textbox_y_fudge), scroll_size)
+        )
+        self.transcript_scroll.setHasVerticalScroller_(
+            main_height >= NSScreen.mainScreen().frame().size.height * 0.64
+        )
+        if hasattr(self.transcript_scroll, "tile"):
+            self.transcript_scroll.tile()
+        clip_size = self.transcript_scroll.contentView().bounds().size
+        transcript_width = max(
+            0.0,
+            clip_size.width - ui.textbox_x_fudge - ui.text_right_inset,
+        )
+        transcript_height = max(
+            clip_size.height,
+            main_height - 2 * ui.text_corner_radius - ui.textbox_y_fudge,
+        )
+        self.transcript_view.setFrame_(
+            (
+                (ui.textbox_x_fudge, ui.textbox_y_fudge),
+                (transcript_width, transcript_height),
+            )
+        )
+        if getattr(self, "_scroll_to_end", True):
+            self.transcript_view.scrollRangeToVisible_(
+                (self.transcript_view.textStorage().length(), 0)
+            )
+        else:
+            clip = self.transcript_scroll.contentView()
+            clip.scrollToPoint_(self._saved_scroll_origin)
+            self.transcript_scroll.reflectScrolledClipView_(clip)
+
+    @objc.python_method
+    def input_text(self) -> str:
+        return str(self.input_text_view.string())
+
+    @objc.python_method
+    def clear_input(self) -> None:
+        self.input_text_view.setString_("")
+
+    @objc.python_method
+    def clear_block_focus(self) -> None:
+        self.focused_block = -1
+        storage = self.transcript_view.textStorage()
+        storage.removeAttribute_range_(
+            NSBackgroundColorAttributeName,
+            (0, storage.length()),
+        )
+
 class MainThreadBridge(NSObject):
     ui = None
 
     def pollSignals_(self, _timer):
         pass
 
-    def repaint_(self, _value):
+    def repaint_(self, value):
         if self.ui is not None:
-            self.ui._main_thread_update()
+            tab_id = None if value is None else int(value)
+            self.ui._main_thread_update(tab_id)
 
     def captureAndQuit_(self, path):
         from macagentic.ui.screenshot import capture_window_by_title
@@ -321,7 +674,7 @@ class AppDelegate(NSObject):
         _application,
         _has_visible_windows,
     ):
-        if self.ui is not None and self.ui.window is None:
+        if self.ui is not None and not self.ui.window_is_visible():
             self.ui.hotkey_pressed()
         return True
 
@@ -336,22 +689,27 @@ class AppDelegate(NSObject):
         self.ui.set_active_model_tier(tier)
 
 
-@dataclass
 class UITab:
-    # Identity and conversation
-    id: int
-    agent: Agent
-
-    # Display state
-    title: str = "New Agent"
-    input_text: str = ""
-    tool_call_descriptions: dict[str, str] = field(default_factory=dict)
-    log_render_index: int = 0
-    math_bitmap_cache: MathBitmapCache = field(default_factory=MathBitmapCache)
-
-    # Execution
-    thread: threading.Thread | None = None
-    requests: queue.Queue[str] = field(default_factory=queue.Queue)
+    def __init__(
+        self,
+        tab_id: int,
+        agent: Agent,
+        *,
+        title: str = "New Agent",
+        input_text: str = "",
+    ) -> None:
+        self.id = tab_id
+        self.agent = agent
+        self.title = title
+        self.input_text = input_text
+        self.tool_call_descriptions: dict[str, str] = {}
+        self.display_event_index = 0
+        self.math_bitmap_cache = MathBitmapCache()
+        self.expanded_block_ids: set[str] = set()
+        self.tab_bar_item: TabBarItemView | None = None
+        self.content_view: TabContentView | None = None
+        self.thread: threading.Thread | None = None
+        self.requests: queue.Queue[str] = queue.Queue()
 
     def running(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
@@ -362,10 +720,7 @@ class MacAgenticUI:
 
     tabs: list[UITab]
     active_index: int
-    focused_block: int
     window: NSWindow | None
-    input_field: NSTextView | None
-    text_view: NSTextView | None
     renderer: MarkdownRenderer
     bridge: MainThreadBridge
     update_queue: queue.Queue[UIUpdate]
@@ -394,16 +749,18 @@ class MacAgenticUI:
         active_index: int = 0,
     ) -> None:
         self.window = None
-        self.input_field = None
-        self.text_view = None
+        self.window_content = None
+        self.root_view = None
+        self.tab_bar_container = None
+        self.tab_content_container = None
+        self.tab_separators = []
         self.renderer = MarkdownRenderer()
         self.tabs = (
-            tabs if tabs is not None else [UITab(id=agent.id, agent=agent)]
+            tabs if tabs is not None else [UITab(agent.id, agent)]
         )
         for tab in self.tabs:
             tab.agent.ui = self
         self.active_index = active_index
-        self.focused_block = -1
         self.update_queue: queue.Queue[UIUpdate] = queue.Queue()
         self._rendering = False
         self._render_pending = False
@@ -425,6 +782,35 @@ class MacAgenticUI:
     @property
     def active_tab(self) -> UITab:
         return self.tabs[self.active_index]
+
+    @property
+    def active_content_view(self) -> TabContentView | None:
+        return self.active_tab.content_view if self.tabs else None
+
+    @property
+    def input_field(self) -> NSTextView | None:
+        content = self.active_content_view
+        return content.input_text_view if content is not None else None
+
+    @property
+    def text_view(self) -> ConversationTextView | None:
+        content = self.active_content_view
+        return content.transcript_view if content is not None else None
+
+    @property
+    def top_bar_text_view(self) -> NSTextView | None:
+        content = self.active_content_view
+        return content.status_view if content is not None else None
+
+    @property
+    def input_delegate(self) -> InputDelegate | None:
+        content = self.active_content_view
+        return content.input_delegate if content is not None else None
+
+    @property
+    def conversation_delegate(self) -> ConversationDelegate | None:
+        content = self.active_content_view
+        return content.conversation_delegate if content is not None else None
 
     def start(self, *, dont_run_app: bool = False) -> None:
         global _hotkey_ui
@@ -455,45 +841,71 @@ class MacAgenticUI:
             cocoa_app.run()
 
     def new_tab(self) -> None:
-        self._save_input()
+        if self.tabs:
+            self._sync_input_text(self.active_tab)
         agent = app.create_agent(render_markdown=True)
         agent.ui = self
-        self.tabs.append(UITab(id=agent.id, agent=agent))
+        self.tabs.append(UITab(agent.id, agent))
         self.active_index = len(self.tabs) - 1
-        if self.window is not None:
+        if self.window_is_visible():
+            self._process_new_display_events(self.active_tab)
             self._render_window()
 
     def close_tab(self, index: int) -> None:
         if not 0 <= index < len(self.tabs):
             return
+        active_id = self.active_tab.id
         tab = self.tabs[index]
+        self._sync_input_text(tab)
         tab.agent.interrupt()
         save_history(
             app.workspace,
             render_history(tab.agent.conversation_log.snapshot()),
         )
+        if tab.content_view is not None:
+            tab.content_view.removeFromSuperview()
+        if tab.tab_bar_item is not None:
+            tab.tab_bar_item.removeFromSuperview()
         self.tabs.pop(index)
         if not self.tabs:
             agent = app.create_agent(render_markdown=True)
             agent.ui = self
-            self.tabs.append(UITab(id=agent.id, agent=agent))
+            self.tabs.append(UITab(agent.id, agent))
             self.active_index = 0
+        elif tab.id == active_id:
+            self.active_index = min(index, len(self.tabs) - 1)
         else:
-            self.active_index = min(self.active_index, len(self.tabs) - 1)
-        self._render_window()
+            self.active_index = next(
+                i for i, candidate in enumerate(self.tabs)
+                if candidate.id == active_id
+            )
+        if self.window_is_visible():
+            self._process_new_display_events(self.active_tab)
+            self._render_window()
 
     def switch_tab(self, index: int) -> None:
         if not 0 <= index < len(self.tabs):
             return
-        self._save_input()
+        self._sync_input_text(self.active_tab)
         self.active_index = index
-        self.focused_block = -1
-        self._render_window()
+        self._process_new_display_events(self.active_tab)
+        if self.window_is_visible():
+            self._render_window()
+
+    def switch_tab_by_id(self, tab_id: int) -> None:
+        index = self._index_for_tab_id(tab_id)
+        if index is not None:
+            self.switch_tab(index)
+
+    def close_tab_by_id(self, tab_id: int) -> None:
+        index = self._index_for_tab_id(tab_id)
+        if index is not None:
+            self.close_tab(index)
 
     def set_active_model_tier(self, tier: str) -> None:
         self.active_tab.agent.set_model_tier(tier)
         self._update_model_menu_state()
-        if self.window is not None:
+        if self.window_is_visible():
             self._render_window()
 
     def submit(self, request: str) -> None:
@@ -538,16 +950,33 @@ class MacAgenticUI:
         NSApp().terminate_(None)
 
     def update(self) -> None:
+        if not self.tabs:
+            return
         if NSThread.isMainThread():
-            self._main_thread_update()
+            tab = self.active_tab
         else:
-            self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
-                "repaint:", None, False
+            caller = threading.current_thread()
+            tab = next(
+                (tab for tab in self.tabs if tab.thread is caller),
+                None,
             )
+        if tab is None:
+            return
+        self._schedule_main_thread_update(tab.id)
 
     def post_update(self, event: UIUpdate) -> None:
         self.update_queue.put(event)
-        self.update()
+        self._schedule_main_thread_update(None)
+
+    def _schedule_main_thread_update(self, tab_id: int | None) -> None:
+        if NSThread.isMainThread():
+            self._main_thread_update(tab_id)
+        else:
+            self.bridge.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "repaint:",
+                tab_id,
+                False,
+            )
 
     def _start_tab_thread(self, tab: UITab) -> None:
         request = tab.requests.get_nowait()
@@ -574,7 +1003,9 @@ class MacAgenticUI:
         )
         tab.thread.start()
 
-    def _main_thread_update(self) -> None:
+    def _main_thread_update(self, updated_tab_id: int | None = None) -> None:
+        render_active = False
+        refresh_titles: set[int] = set()
         while True:
             try:
                 event = self.update_queue.get_nowait()
@@ -585,8 +1016,10 @@ class MacAgenticUI:
                 continue
             if isinstance(event, SetTabTitle):
                 tab.title = event.title
+                refresh_titles.add(tab.id)
             elif isinstance(event, SetToolCallDescription):
                 tab.tool_call_descriptions[event.tool_call_id] = event.text
+                render_active = render_active or tab is self.active_tab
             elif (
                 isinstance(event, AgentThreadCompleted)
                 and tab.thread is not None
@@ -605,16 +1038,27 @@ class MacAgenticUI:
                         str(path),
                         False,
                     )
+                refresh_titles.add(tab.id)
 
-        for tab in self.tabs:
-            self._start_display_work(tab)
-        if self.window is not None:
+        updated_tab = (
+            self._tab_with_id(updated_tab_id)
+            if updated_tab_id is not None
+            else None
+        )
+        if updated_tab is self.active_tab:
+            self._process_new_display_events(updated_tab)
+            render_active = True
+
+        if self.window_is_visible() and render_active:
             self._render_window()
+        elif self.window is not None:
+            for tab_id in refresh_titles:
+                self._refresh_tab_title(tab_id)
 
-    def _start_display_work(self, tab: UITab) -> None:
+    def _process_new_display_events(self, tab: UITab) -> None:
         events = tab.agent.conversation_log.snapshot()
-        new_events = events[tab.log_render_index :]
-        tab.log_render_index = len(events)
+        new_events = events[tab.display_event_index :]
+        tab.display_event_index = len(events)
         user_request = next(
             (
                 str(event.payload.get("content", ""))
@@ -694,22 +1138,20 @@ class MacAgenticUI:
         if not self.tabs:
             return
         self._update_model_menu_state()
-        draft = self._current_input()
-        if self.window is not None:
-            self.active_tab.input_text = draft
-
+        tab = self.active_tab
         transcript = render_conversation(
-            self.active_tab.agent.conversation_log.snapshot(),
-            tool_call_descriptions=self.active_tab.tool_call_descriptions,
+            tab.agent.conversation_log.snapshot(),
+            tool_call_descriptions=tab.tool_call_descriptions,
             show_tool_output=app.show_tool_output,
         )
-        rendered = self.renderer.render(
+        cocoa_text, markdown_display_map = self.renderer.render(
             transcript,
             NSColor.darkGrayColor(),
-            math_bitmap_cache=self.active_tab.math_bitmap_cache,
+            expanded_block_ids=tab.expanded_block_ids,
+            math_bitmap_cache=tab.math_bitmap_cache,
             scale_factor=self._window_backing_scale(),
         )
-        content_height = self._measure(rendered)
+        content_height = self._measure(cocoa_text)
         screen = NSScreen.mainScreen().frame().size
         has_content = bool(transcript)
         max_window_height = int(screen.height * 0.9)
@@ -753,41 +1195,7 @@ class MacAgenticUI:
                 window_height + 2 * self.window_corner_radius,
             ),
         )
-
-        if self.window is None:
-            self.window = QuickPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-                frame,
-                NSBorderlessWindowMask,
-                NSBackingStoreBuffered,
-                False,
-            )
-            self.window.ui = self
-            self.window.setTitle_("macAgentic")
-            self.window.setLevel_(3)
-            self.window.setBackgroundColor_(NSColor.clearColor())
-        else:
-            self.window.setFrame_display_(frame, True)
-
-        content = NSView.alloc().initWithFrame_(
-            ((0, 0), frame[1])
-        )
-        self.window.setContentView_(content)
-        root = NSBox.alloc().initWithFrame_(
-            (
-                (0, 0),
-                (
-                    self.window_width + self.window_corner_radius,
-                    window_height + self.window_corner_radius,
-                ),
-            )
-        )
-        root.setBoxType_(NSBoxCustom)
-        root.setBorderType_(NSNoBorder)
-        root.setCornerRadius_(self.window_corner_radius)
-        root.setFillColor_(
-            NSColor.colorWithCalibratedWhite_alpha_(0.9, 1.0)
-        )
-        content.addSubview_(root)
+        self._ensure_window_shell(frame)
 
         input_y = self.padding
         if has_content:
@@ -802,104 +1210,102 @@ class MacAgenticUI:
             main_y = 0
             tab_y = input_y + self.input_height
         top_y = tab_y + self.tab_bar_height + self.padding
-
-        self._render_top_bar(root, top_y)
-        self._render_tabs(root, tab_y)
-        if has_content:
-            self._render_transcript(root, main_y, main_height, rendered)
-        else:
-            self.text_view = None
-        self._render_input(root, input_y, self.active_tab.input_text)
-
+        root_size = (
+            self.window_width + self.window_corner_radius,
+            window_height + self.window_corner_radius,
+        )
+        self.window_content.setFrame_(((0, 0), frame[1]))
+        self.root_view.setFrame_(((0, 0), root_size))
+        self.tab_content_container.setFrame_(((0, 0), root_size))
+        content_view = self._ensure_tab_content_view(tab)
+        content_view.set_status(tab.agent)
+        content_view.set_transcript(cocoa_text, markdown_display_map)
+        content_view.layout_content(
+            root_size=root_size,
+            top_y=top_y,
+            main_y=main_y,
+            main_height=main_height,
+            has_content=has_content,
+        )
+        for candidate in self.tabs:
+            if candidate.content_view is not None:
+                candidate.content_view.setHidden_(candidate is not tab)
+        self.tab_bar_container.setFrame_(
+            (
+                (self.content_x, tab_y),
+                (self.content_width, self.tab_bar_height),
+            )
+        )
+        self._sync_tab_bar()
         self.window.display()
+        if not self.window.isVisible():
+            self.window.orderFrontRegardless()
         if activate:
             self._activate_window()
         elif self.window.isKeyWindow() and self.input_field is not None:
             self.window.makeFirstResponder_(self.input_field)
 
-    def _render_top_bar(self, root, y: float) -> None:
-        bar = NSBox.alloc().initWithFrame_(
-            ((self.content_x, y), (self.content_width, self.top_bar_height))
-        )
-        bar.setBoxType_(NSBoxCustom)
-        bar.setBorderType_(NSNoBorder)
-        bar.setCornerRadius_(self.text_corner_radius)
-        bar.setFillColor_(
-            NSColor.colorWithCalibratedWhite_alpha_(0.8, 1.0)
-        )
-        root.addSubview_(bar)
-
-        icon_y = int((self.top_bar_height - self.icon_width) / 2) - 5
-        image = NSImageView.alloc().initWithFrame_(
-            ((0, icon_y), (self.icon_width, self.icon_width))
-        )
-        image.setImage_(self.logo)
-        image.setImageScaling_(3)
-        bar.addSubview_(image)
-
-        snapshot = self.active_tab.agent.usage.snapshot()
-        model = display_model_name(self.active_tab.agent.model_name)
-        line1 = f"{model} / ${snapshot.cost:.2f}"
-        line2 = (
-            f"Input: {snapshot.input_tokens:,} / "
-            f"Cached: {snapshot.cached_input_tokens:,}"
-        )
-        line3 = (
-            f"Writes: {snapshot.cache_write_tokens:,} / "
-            f"Output: {snapshot.output_tokens:,}"
-        )
-        status = f"{line1}\n{line2}\n{line3}"
-        text_field_width = 240
-        text_y = icon_y
-        text_height = self.top_bar_height - text_y - 10
-        label = NSTextView.alloc().initWithFrame_(
-            (
-                (self.content_width - text_field_width - 8, text_y),
-                (text_field_width, text_height),
+    def _ensure_window_shell(self, frame) -> None:
+        if self.window is None:
+            self.window = QuickPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                frame,
+                NSBorderlessWindowMask,
+                NSBackingStoreBuffered,
+                False,
             )
-        )
-        label.setString_(status)
-        label.setEditable_(False)
-        label.setSelectable_(False)
-        label.setDrawsBackground_(False)
-        label.setTextContainerInset_((0.0, 0.0))
+            self.window.ui = self
+            self.window.setTitle_("macAgentic")
+            self.window.setLevel_(3)
+            self.window.setBackgroundColor_(NSColor.clearColor())
 
-        paragraph = NSMutableParagraphStyle.alloc().init()
-        paragraph.setAlignment_(2)
-        first_line_attributes = {
-            NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
-            NSForegroundColorAttributeName: (
-                NSColor.colorWithCalibratedWhite_alpha_(0.45, 1.0)
-            ),
-            NSParagraphStyleAttributeName: paragraph,
-        }
-        detail_attributes = {
-            NSFontAttributeName: NSFont.systemFontOfSize_(11.0),
-            NSForegroundColorAttributeName: (
-                NSColor.colorWithCalibratedWhite_alpha_(0.6, 1.0)
-            ),
-            NSParagraphStyleAttributeName: paragraph,
-        }
-        attributed = (
-            NSMutableAttributedString.alloc().initWithString_(status)
-        )
-        attributed.addAttributes_range_(
-            first_line_attributes,
-            (0, len(line1)),
-        )
-        attributed.addAttributes_range_(
-            detail_attributes,
-            (len(line1), len(status) - len(line1)),
-        )
-        label.textStorage().setAttributedString_(attributed)
-        bar.addSubview_(label)
-        self.top_bar_text_view = label
+            content = NSView.alloc().initWithFrame_(((0, 0), frame[1]))
+            self.window.setContentView_(content)
+            self.window_content = content
 
-    def _render_tabs(self, root, y: float) -> None:
-        container = NSView.alloc().initWithFrame_(
-            ((self.content_x, y), (self.content_width, self.tab_bar_height))
-        )
-        root.addSubview_(container)
+            root = NSBox.alloc().initWithFrame_(((0, 0), frame[1]))
+            root.setBoxType_(NSBoxCustom)
+            root.setBorderType_(NSNoBorder)
+            root.setCornerRadius_(self.window_corner_radius)
+            root.setFillColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(0.9, 1.0)
+            )
+            content.addSubview_(root)
+            self.root_view = root
+
+            tab_content = NSView.alloc().initWithFrame_(((0, 0), frame[1]))
+            root.addSubview_(tab_content)
+            self.tab_content_container = tab_content
+
+            tab_bar = NSView.alloc().initWithFrame_(((0, 0), (1, 1)))
+            root.addSubview_(tab_bar)
+            self.tab_bar_container = tab_bar
+        else:
+            self.window.setFrame_display_(frame, True)
+
+    def _ensure_tab_content_view(self, tab: UITab) -> TabContentView:
+        if tab.content_view is None:
+            view = TabContentView.alloc().initWithFrame_(((0, 0), (1, 1)))
+            view.configure(self, tab.id, tab.input_text)
+            self.tab_content_container.addSubview_(view)
+            tab.content_view = view
+        return tab.content_view
+
+    def _ensure_tab_bar_item(self, tab: UITab) -> TabBarItemView:
+        if tab.tab_bar_item is None:
+            item = TabBarItemView.alloc().initWithFrame_(((0, 0), (1, 1)))
+            item.configure(self, tab.id)
+            self.tab_bar_container.addSubview_(item)
+            tab.tab_bar_item = item
+        return tab.tab_bar_item
+
+    def _sync_tab_bar(self) -> None:
+        for separator in self.tab_separators:
+            separator.removeFromSuperview()
+        self.tab_separators = []
+        for tab in self.tabs:
+            if tab.tab_bar_item is not None:
+                tab.tab_bar_item.setHidden_(True)
+
         indices = self._visible_tab_indices()
         separator_width = 1
         separator_count = max(0, len(indices) - 1)
@@ -907,67 +1313,20 @@ class MacAgenticUI:
         tab_width = max(60, int(usable_width / max(1, len(indices))))
         pill_top_padding = 3
         tab_inner_height = self.tab_bar_height - pill_top_padding
-        overlap = int(self.window_corner_radius) + 4
+        # Connect the active tab to the content box without painting over its
+        # first line of text.
+        overlap = self.padding
         x = 0
         for position, index in enumerate(indices):
             tab = self.tabs[index]
-            active = index == self.active_index
             is_last = position == len(indices) - 1
             current_width = self.content_width - x if is_last else tab_width
-            view = ClickableTab.alloc().initWithFrame_(
-                ((x, 0), (current_width, tab_inner_height))
-            )
-            view.ui = self
-            view.index = index
-            container.addSubview_(view)
-
-            if active:
-                background = NSBox.alloc().initWithFrame_(
-                    (
-                        (0, -overlap),
-                        (current_width, tab_inner_height + overlap),
-                    )
-                )
-                background.setBoxType_(NSBoxCustom)
-                background.setBorderType_(NSNoBorder)
-                background.setCornerRadius_(4.0)
-                background.setFillColor_(NSColor.whiteColor())
-                view.addSubview_(background)
-
-            title = f"⟳ {tab.title}" if tab.running() else tab.title
-            label = NSTextField.alloc().initWithFrame_(
-                ((6, 0), (current_width - 28, tab_inner_height))
-            )
-            label.setStringValue_(title)
-            label.setEditable_(False)
-            label.setSelectable_(False)
-            label.setBezeled_(False)
-            label.setDrawsBackground_(False)
-            label.setAlignment_(1)
-            label.setFont_(NSFont.systemFontOfSize_(11.0))
-            label.setTextColor_(
-                NSColor.blackColor()
-                if active
-                else NSColor.colorWithCalibratedWhite_alpha_(0.4, 1.0)
-            )
-            view.addSubview_(label)
-
-            close = CloseTab.alloc().initWithFrame_(
-                ((current_width - 18, 0), (16, tab_inner_height))
-            )
-            close.ui = self
-            close.index = index
-            close_label = NSTextField.alloc().initWithFrame_(
-                ((0, 0), (16, tab_inner_height))
-            )
-            close_label.setStringValue_("×")
-            close_label.setEditable_(False)
-            close_label.setSelectable_(False)
-            close_label.setBezeled_(False)
-            close_label.setDrawsBackground_(False)
-            close_label.setAlignment_(1)
-            close.addSubview_(close_label)
-            view.addSubview_(close)
+            item = self._ensure_tab_bar_item(tab)
+            item.setFrame_(((x, 0), (current_width, tab_inner_height)))
+            item.layout(current_width, tab_inner_height, overlap)
+            item.set_title(tab.title, running=tab.running())
+            item.set_active(index == self.active_index)
+            item.setHidden_(False)
             x += current_width
             if not is_last:
                 separator = NSBox.alloc().initWithFrame_(
@@ -978,110 +1337,15 @@ class MacAgenticUI:
                 separator.setFillColor_(
                     NSColor.colorWithCalibratedWhite_alpha_(0.65, 1.0)
                 )
-                container.addSubview_(separator)
+                self.tab_bar_container.addSubview_(separator)
+                self.tab_separators.append(separator)
                 x += separator_width
 
-    def _render_transcript(self, root, y: float, height: float, rendered) -> None:
-        box = NSBox.alloc().initWithFrame_(
-            ((self.content_x, y), (self.content_width, height))
-        )
-        box.setBoxType_(NSBoxCustom)
-        box.setBorderType_(NSNoBorder)
-        box.setCornerRadius_(self.text_corner_radius)
-        box.setFillColor_(NSColor.whiteColor())
-        root.addSubview_(box)
-
-        scroll = NSScrollView.alloc().initWithFrame_(
-            (
-                (0, self.textbox_y_fudge),
-                (
-                    self.content_width - 2 * self.text_corner_radius,
-                    height - 2 * self.text_corner_radius,
-                ),
-            )
-        )
-        scroll.setHasVerticalScroller_(height >= NSScreen.mainScreen().frame().size.height * 0.64)
-        scroll.setHasHorizontalScroller_(False)
-        box.addSubview_(scroll)
-
-        text = ConversationTextView.alloc().initWithFrame_(
-            (
-                (self.textbox_x_fudge, self.textbox_y_fudge),
-                (
-                    self.content_width - 2 * self.text_corner_radius,
-                    max(height - 2 * self.text_corner_radius, 1),
-                ),
-            )
-        )
-        text.ui = self
-        text.setEditable_(False)
-        text.setSelectable_(True)
-        text.setDrawsBackground_(False)
-        text.setLinkTextAttributes_({})
-        text.textStorage().setAttributedString_(rendered)
-        text.setVerticallyResizable_(True)
-        text.setHorizontallyResizable_(False)
-        text.textContainer().setWidthTracksTextView_(True)
-        text.textContainer().setLineFragmentPadding_(0)
-        delegate = ConversationDelegate.alloc().init()
-        delegate.ui = self
-        text.setDelegate_(delegate)
-        self.conversation_delegate = delegate
-        self.text_view = text
-        scroll.setDocumentView_(text)
-        if hasattr(scroll, "tile"):
-            scroll.tile()
-        clip_size = scroll.contentView().bounds().size
-        text_width = max(
-            0.0,
-            clip_size.width - self.textbox_x_fudge - self.text_right_inset,
-        )
-        text_height = max(
-            clip_size.height,
-            height - 2 * self.text_corner_radius - self.textbox_y_fudge,
-        )
-        text.setFrame_(
-            (
-                (self.textbox_x_fudge, self.textbox_y_fudge),
-                (text_width, text_height),
-            )
-        )
-        text.scrollRangeToVisible_((text.textStorage().length(), 0))
-
-    def _render_input(self, root, y: float, draft: str) -> None:
-        box = NSBox.alloc().initWithFrame_(
-            ((self.content_x, y), (self.content_width, self.input_height))
-        )
-        box.setBoxType_(NSBoxCustom)
-        box.setBorderType_(NSNoBorder)
-        box.setCornerRadius_(self.text_corner_radius)
-        box.setFillColor_(NSColor.whiteColor())
-        root.addSubview_(box)
-
-        scroll = NSScrollView.alloc().initWithFrame_(
-            (
-                (self.textbox_x_fudge, self.textbox_y_fudge),
-                (
-                    self.content_width - 2 * self.text_corner_radius,
-                    self.input_height - 2 * self.text_corner_radius,
-                ),
-            )
-        )
-        scroll.setHasVerticalScroller_(False)
-        box.addSubview_(scroll)
-        field = NSTextView.alloc().initWithFrame_(
-            ((0, 0), scroll.frame().size)
-        )
-        field.setString_(draft)
-        field.setFont_(NSFont.systemFontOfSize_(FONT_SIZE))
-        field.setDrawsBackground_(False)
-        field.setAutomaticQuoteSubstitutionEnabled_(False)
-        field.setAutomaticDashSubstitutionEnabled_(False)
-        field.setSelectedRange_((len(draft), 0))
-        delegate = InputDelegate.alloc().initWithUI_textView_(self, field)
-        self.input_delegate = delegate
-        self.input_field = field
-        scroll.setDocumentView_(field)
+    def _refresh_tab_title(self, tab_id: int) -> None:
+        tab = self._tab_with_id(tab_id)
+        if tab is None or tab.tab_bar_item is None:
+            return
+        tab.tab_bar_item.set_title(tab.title, running=tab.running())
 
     def _measure(self, attributed) -> float:
         text_width = self.content_width - 2 * self.text_corner_radius
@@ -1108,11 +1372,21 @@ class MacAgenticUI:
         return list(reversed(range(max(0, end - 5), end)))
 
     def toggle_block(self, block_id: str) -> None:
-        self.renderer.toggle_block(block_id)
+        expanded = self.active_tab.expanded_block_ids
+        if block_id in expanded:
+            expanded.remove(block_id)
+        else:
+            expanded.add(block_id)
         self._render_window()
 
     def copy_block(self, block_id: str) -> None:
-        content = self.renderer.block_content(block_id)
+        content_view = self.active_content_view
+        display_map = (
+            content_view.markdown_display_map
+            if content_view is not None
+            else None
+        )
+        content = display_map.block_content(block_id) if display_map else None
         if content is None:
             return
         pasteboard = NSPasteboard.generalPasteboard()
@@ -1120,14 +1394,24 @@ class MacAgenticUI:
         pasteboard.setString_forType_(content, NSStringPboardType)
 
     def focus_next_block(self, backwards: bool = False) -> bool:
-        if not self.renderer.block_ranges or self.text_view is None:
+        content_view = self.active_content_view
+        display_map = (
+            content_view.markdown_display_map
+            if content_view is not None
+            else None
+        )
+        if (
+            content_view is None
+            or display_map is None
+            or not display_map.block_ranges
+        ):
             return False
         step = -1 if backwards else 1
-        self.focused_block = (
-            self.focused_block + step
-        ) % len(self.renderer.block_ranges)
-        _, start, length = self.renderer.block_ranges[self.focused_block]
-        storage = self.text_view.textStorage()
+        content_view.focused_block = (
+            content_view.focused_block + step
+        ) % len(display_map.block_ranges)
+        _, start, length = display_map.block_ranges[content_view.focused_block]
+        storage = content_view.transcript_view.textStorage()
         storage.removeAttribute_range_(
             NSBackgroundColorAttributeName, (0, storage.length())
         )
@@ -1138,28 +1422,41 @@ class MacAgenticUI:
             ),
             (start, length),
         )
-        self.text_view.scrollRangeToVisible_((start, length))
-        self.window.makeFirstResponder_(self.text_view)
+        content_view.transcript_view.scrollRangeToVisible_((start, length))
+        self.window.makeFirstResponder_(content_view.transcript_view)
         return True
 
     def copy_focused_block(self) -> None:
-        if 0 <= self.focused_block < len(self.renderer.block_ranges):
-            block_id, _, _ = self.renderer.block_ranges[self.focused_block]
+        content_view = self.active_content_view
+        display_map = (
+            content_view.markdown_display_map
+            if content_view is not None
+            else None
+        )
+        if (
+            content_view is not None
+            and display_map is not None
+            and 0 <= content_view.focused_block < len(display_map.block_ranges)
+        ):
+            block_id, _, _ = display_map.block_ranges[
+                content_view.focused_block
+            ]
             self.copy_block(block_id)
 
     def exit_block_focus(self) -> None:
-        self.focused_block = -1
-        self._render_window()
+        if self.active_content_view is not None:
+            self.active_content_view.clear_block_focus()
 
     def close_window(self) -> None:
-        self._save_input()
+        for tab in self.tabs:
+            self._sync_input_text(tab)
         if self.window is not None:
             self.window.orderOut_(None)
-            self.window = None
         NSApplication.sharedApplication().hide_(None)
 
     def save_session(self) -> None:
-        self._save_input()
+        for tab in self.tabs:
+            self._sync_input_text(tab)
         for tab in self.tabs:
             tab.agent.interrupt()
         for tab in self.tabs:
@@ -1183,24 +1480,33 @@ class MacAgenticUI:
         )
 
     def hotkey_pressed(self, *, activate: bool = True) -> None:
-        if self.window is None:
+        if not self.window_is_visible():
+            self._process_new_display_events(self.active_tab)
             self._render_window(activate=activate)
         else:
             self.close_window()
 
-    def _save_input(self) -> None:
-        if self.input_field is not None and self.tabs:
-            self.active_tab.input_text = str(self.input_field.string())
+    def window_is_visible(self) -> bool:
+        return self.window is not None and bool(self.window.isVisible())
 
-    def _current_input(self) -> str:
-        if self.input_field is None:
-            return self.active_tab.input_text if self.tabs else ""
-        return str(self.input_field.string())
+    def _sync_input_text(self, tab: UITab) -> None:
+        if tab.content_view is not None:
+            tab.input_text = tab.content_view.input_text()
 
     def _clear_input(self) -> None:
         self.active_tab.input_text = ""
-        if self.input_field is not None:
-            self.input_field.setString_("")
+        if self.active_content_view is not None:
+            self.active_content_view.clear_input()
+
+    def _index_for_tab_id(self, tab_id: int) -> int | None:
+        return next(
+            (
+                index
+                for index, tab in enumerate(self.tabs)
+                if tab.id == tab_id
+            ),
+            None,
+        )
 
     def _update_model_menu_state(self) -> None:
         current = self.active_tab.agent.model_name if self.tabs else ""
