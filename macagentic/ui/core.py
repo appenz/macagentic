@@ -604,9 +604,11 @@ class TabContentView(NSView):
         if hasattr(self.transcript_scroll, "tile"):
             self.transcript_scroll.tile()
         clip_size = self.transcript_scroll.contentView().bounds().size
+        # Prefer layout constants over clip bounds for width: after tab switches
+        # / window resizes, clip.width can briefly be 0 and blank the transcript.
         transcript_width = max(
             0.0,
-            clip_size.width - ui.textbox_x_fudge - ui.text_right_inset,
+            scroll_size[0] - ui.textbox_x_fudge - ui.text_right_inset,
         )
         transcript_height = max(
             clip_size.height,
@@ -1218,6 +1220,11 @@ class MacAgenticUI:
         self.root_view.setFrame_(((0, 0), root_size))
         self.tab_content_container.setFrame_(((0, 0), root_size))
         content_view = self._ensure_tab_content_view(tab)
+        # Unhide before layout: NSScrollView clip bounds / tile are unreliable
+        # while the content view is still hidden after a window resize.
+        for candidate in self.tabs:
+            if candidate.content_view is not None:
+                candidate.content_view.setHidden_(candidate is not tab)
         content_view.set_status(tab.agent)
         content_view.set_transcript(cocoa_text, markdown_display_map)
         content_view.layout_content(
@@ -1227,9 +1234,6 @@ class MacAgenticUI:
             main_height=main_height,
             has_content=has_content,
         )
-        for candidate in self.tabs:
-            if candidate.content_view is not None:
-                candidate.content_view.setHidden_(candidate is not tab)
         self.tab_bar_container.setFrame_(
             (
                 (self.content_x, tab_y),
