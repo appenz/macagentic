@@ -467,6 +467,9 @@ class TabContentView(NSView):
         transcript_view.setLinkTextAttributes_({})
         transcript_view.setVerticallyResizable_(True)
         transcript_view.setHorizontallyResizable_(False)
+        transcript_view.setMinSize_((0.0, 0.0))
+        transcript_view.setMaxSize_((1.0e7, 1.0e7))
+        transcript_view.textContainer().setContainerSize_((1.0, 1.0e7))
         transcript_view.textContainer().setWidthTracksTextView_(True)
         transcript_view.textContainer().setLineFragmentPadding_(0)
         conversation_delegate = ConversationDelegate.alloc().init()
@@ -621,8 +624,10 @@ class TabContentView(NSView):
             ui.content_width - 2 * ui.text_corner_radius,
             main_height - 2 * ui.text_corner_radius,
         )
+        # Match input: inset the scroll view inside the rounded box so glyphs are
+        # not clipped by the corner radius. Keep the document view at (0, 0).
         self.transcript_scroll.setFrame_(
-            ((0, ui.textbox_y_fudge), scroll_size)
+            ((ui.textbox_x_fudge, ui.textbox_y_fudge), scroll_size)
         )
         self.transcript_scroll.setHasVerticalScroller_(
             main_height >= NSScreen.mainScreen().frame().size.height * 0.64
@@ -630,29 +635,41 @@ class TabContentView(NSView):
         if hasattr(self.transcript_scroll, "tile"):
             self.transcript_scroll.tile()
         clip_size = self.transcript_scroll.contentView().bounds().size
-        # Prefer layout constants over clip bounds for width: after tab switches
-        # / window resizes, clip.width can briefly be 0 and blank the transcript.
-        transcript_width = max(
-            0.0,
-            scroll_size[0] - ui.textbox_x_fudge - ui.text_right_inset,
+        # Prefer the post-tile clip width (accounts for the scroller). Fall back
+        # to scroll_size when clip.width is briefly 0 after hide/show + resize.
+        clip_width = float(clip_size.width)
+        if clip_width <= 1.0:
+            clip_width = float(scroll_size[0])
+        transcript_width = max(0.0, clip_width - ui.text_right_inset)
+        text_container = self.transcript_view.textContainer()
+        text_container.setContainerSize_((transcript_width, 1.0e7))
+        self.transcript_view.setFrame_(
+            ((0.0, 0.0), (transcript_width, max(1.0, float(clip_size.height))))
+        )
+        layout_manager = self.transcript_view.layoutManager()
+        layout_manager.ensureLayoutForTextContainer_(text_container)
+        used_height = float(
+            layout_manager.usedRectForTextContainer_(text_container).size.height
         )
         transcript_height = max(
-            clip_size.height,
+            float(clip_size.height),
+            used_height,
             main_height - 2 * ui.text_corner_radius - ui.textbox_y_fudge,
         )
         self.transcript_view.setFrame_(
-            (
-                (ui.textbox_x_fudge, ui.textbox_y_fudge),
-                (transcript_width, transcript_height),
-            )
+            ((0.0, 0.0), (transcript_width, transcript_height))
         )
+        self.transcript_view.setNeedsDisplay_(True)
         if getattr(self, "_scroll_to_end", True):
             self.transcript_view.scrollRangeToVisible_(
                 (self.transcript_view.textStorage().length(), 0)
             )
         else:
             clip = self.transcript_scroll.contentView()
-            clip.scrollToPoint_(self._saved_scroll_origin)
+            # Restore vertical position only; horizontal origin must stay 0 now
+            # that the document view is pinned at (0, 0).
+            saved = self._saved_scroll_origin
+            clip.scrollToPoint_((0.0, float(saved.y)))
             self.transcript_scroll.reflectScrolledClipView_(clip)
 
     @objc.python_method
@@ -1383,13 +1400,20 @@ class MacAgenticUI:
         tab.tab_bar_item.set_title(tab.title, running=tab.running())
 
     def _measure(self, attributed) -> float:
-        text_width = self.content_width - 2 * self.text_corner_radius
+        # Approximate the live transcript width: rounded-box inset, optional
+        # scroller (~15pt when content is tall), and the right text inset.
+        text_width = (
+            self.content_width
+            - 2 * self.text_corner_radius
+            - self.text_right_inset
+        )
         text = NSTextView.alloc().initWithFrame_(
             ((0, 0), (text_width, 10000))
         )
         text.setHorizontallyResizable_(False)
         text.textContainer().setContainerSize_((text_width, 10000))
         text.textContainer().setWidthTracksTextView_(True)
+        text.textContainer().setLineFragmentPadding_(0)
         text.textStorage().setAttributedString_(attributed)
         layout = text.layoutManager()
         container = text.textContainer()
