@@ -145,6 +145,15 @@ class QuickPanel(NSPanel):
                 return True
         return objc.super(QuickPanel, self).performKeyEquivalent_(event)
 
+    # System DefaultKeyBinding maps ^Tab / ^$Tab to these; reclaim for tabs.
+    def selectNextKeyView_(self, _sender):
+        if self.ui is not None:
+            self.ui.cycle_tab(-1)
+
+    def selectPreviousKeyView_(self, _sender):
+        if self.ui is not None:
+            self.ui.cycle_tab(1)
+
 
 class TabCloseView(NSView):
     ui = None
@@ -237,7 +246,10 @@ class ConversationTextView(NSTextView):
         characters = str(event.charactersIgnoringModifiers() or "")
         flags = event.modifierFlags()
         if characters == "\t":
-            self.ui.focus_next_block(backwards=bool(flags & NSShiftKeyMask))
+            if flags & NSControlKeyMask:
+                self.ui.cycle_tab(1 if flags & NSShiftKeyMask else -1)
+            else:
+                self.ui.focus_next_block(backwards=bool(flags & NSShiftKeyMask))
             return
         if characters in {"\r", "\n"}:
             self.ui.copy_focused_block()
@@ -293,8 +305,19 @@ class InputDelegate(NSObject):
                 else:
                     self.ui.submit(text)
                 return True
-            if selector == "insertTab:":
-                if self.ui.focus_next_block():
+            if selector in ("selectNextKeyView:", "selectPreviousKeyView:"):
+                # System DefaultKeyBinding maps ^Tab / ^$Tab to these.
+                self.ui.cycle_tab(
+                    1 if selector == "selectPreviousKeyView:" else -1
+                )
+                return True
+            if selector in ("insertTab:", "insertBacktab:"):
+                event = NSApp().currentEvent()
+                flags = event.modifierFlags() if event is not None else 0
+                if flags & NSControlKeyMask:
+                    self.ui.cycle_tab(1 if flags & NSShiftKeyMask else -1)
+                    return True
+                if selector == "insertTab:" and self.ui.focus_next_block():
                     return True
                 return False
             if selector == "cancelOperation:":
@@ -306,6 +329,9 @@ class InputDelegate(NSObject):
                     return False
                 flags = event.modifierFlags()
                 key = str(event.charactersIgnoringModifiers() or "").lower()
+                if flags & NSControlKeyMask and key == "\t":
+                    self.ui.cycle_tab(1 if flags & NSShiftKeyMask else -1)
+                    return True
                 if flags & NSCommandKeyMask:
                     if key == "c":
                         self.text_view.copy_(None)
@@ -893,6 +919,11 @@ class MacAgenticUI:
         self._process_new_display_events(self.active_tab)
         if self.window_is_visible():
             self._render_window()
+
+    def cycle_tab(self, delta: int = 1) -> None:
+        if len(self.tabs) < 2:
+            return
+        self.switch_tab((self.active_index + delta) % len(self.tabs))
 
     def switch_tab_by_id(self, tab_id: int) -> None:
         index = self._index_for_tab_id(tab_id)
