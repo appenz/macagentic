@@ -181,6 +181,43 @@ def test_ui_passively_renders_conversation_log(monkeypatch) -> None:
 
 
 @pytest.mark.uitest
+def test_transcript_scrolls_to_new_long_query_and_output(monkeypatch) -> None:
+    ui, driver = open_test_ui(monkeypatch)
+    agent = ui.active_tab.agent
+    query = "\n".join(f"query line {index}" for index in range(150))
+
+    def assert_scrolled_to_bottom() -> None:
+        content = ui.active_content_view
+        clip = content.transcript_scroll.contentView()
+        bottom = clip.bounds().origin.y + clip.bounds().size.height
+        document_height = content.transcript_view.frame().size.height
+        assert bottom >= document_height - 2
+
+    agent.conversation_log.append("user_input", {"content": query})
+    ui._main_thread_update(agent.id)
+    driver.spin()
+    assert_scrolled_to_bottom()
+
+    output = "\n".join(f"output line {index}" for index in range(150))
+    agent.conversation_log.append_message(
+        {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": output}],
+                }
+            ],
+            "extra": {"actions": []},
+        }
+    )
+    ui._main_thread_update(agent.id)
+    driver.spin()
+    assert_scrolled_to_bottom()
+    ui.close_window()
+
+
+@pytest.mark.uitest
 def test_tab_drafts_remain_with_their_tabs(monkeypatch) -> None:
     ui, driver = open_test_ui(monkeypatch)
     first_content = ui.active_tab.content_view

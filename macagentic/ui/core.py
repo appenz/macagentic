@@ -553,12 +553,16 @@ class TabContentView(NSView):
         cocoa_text,
         markdown_display_map: MarkdownDisplayMap,
     ) -> None:
+        previous_length = self.transcript_view.textStorage().length()
         selected = self.transcript_view.selectedRange()
         clip = self.transcript_scroll.contentView()
         origin = clip.bounds().origin
         document_height = self.transcript_view.frame().size.height
         visible_height = clip.bounds().size.height
-        at_bottom = origin.y + visible_height >= document_height - 2
+        at_bottom = (
+            previous_length == 0
+            or origin.y + visible_height >= document_height - 2
+        )
 
         self.transcript_view.textStorage().setAttributedString_(cocoa_text)
         length = self.transcript_view.textStorage().length()
