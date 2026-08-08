@@ -20,6 +20,7 @@ def test_main_runs_geoloc_in_its_directory(monkeypatch, tmp_path) -> None:
     (geoloc_dir / "geoloc.py").write_text("print('ok')\n")
     monkeypatch.setattr(noteheader_tool, "GEOLOC_DIR", geoloc_dir)
     monkeypatch.setenv("VIRTUAL_ENV", "/tmp/parent-venv")
+    monkeypatch.setattr(sys, "argv", ["noteheader"])
 
     calls: list[dict[str, object]] = []
 
@@ -37,6 +38,35 @@ def test_main_runs_geoloc_in_its_directory(monkeypatch, tmp_path) -> None:
     assert calls[0]["cwd"] == geoloc_dir
     assert calls[0]["check"] is False
     assert "VIRTUAL_ENV" not in calls[0]["env"]
+
+
+def test_main_forwards_ical_uid_args(monkeypatch, tmp_path) -> None:
+    geoloc_dir = tmp_path / "geoloc"
+    geoloc_dir.mkdir()
+    (geoloc_dir / "geoloc.py").write_text("print('ok')\n")
+    monkeypatch.setattr(noteheader_tool, "GEOLOC_DIR", geoloc_dir)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["noteheader", "--ical-uid", "event-uid@google.com"],
+    )
+
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, cwd=None, env=None, check=False):
+        calls.append({"command": command})
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(noteheader_tool.subprocess, "run", fake_run)
+
+    assert noteheader_tool.main() == 0
+    assert calls[0]["command"] == [
+        "uv",
+        "run",
+        "geoloc.py",
+        "--ical-uid",
+        "event-uid@google.com",
+    ]
 
 
 def test_main_errors_when_geoloc_missing(monkeypatch, tmp_path, capsys) -> None:

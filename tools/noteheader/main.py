@@ -26,7 +26,7 @@ def main() -> int:
     env.pop("VIRTUAL_ENV", None)
 
     result = subprocess.run(
-        ["uv", "run", GEOLOC_SCRIPT],
+        ["uv", "run", GEOLOC_SCRIPT, *sys.argv[1:]],
         cwd=GEOLOC_DIR,
         env=env,
         check=False,
