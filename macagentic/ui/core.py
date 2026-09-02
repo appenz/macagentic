@@ -553,25 +553,13 @@ class TabContentView(NSView):
         cocoa_text,
         markdown_display_map: MarkdownDisplayMap,
     ) -> None:
-        previous_length = self.transcript_view.textStorage().length()
         selected = self.transcript_view.selectedRange()
-        clip = self.transcript_scroll.contentView()
-        origin = clip.bounds().origin
-        document_height = self.transcript_view.frame().size.height
-        visible_height = clip.bounds().size.height
-        at_bottom = (
-            previous_length == 0
-            or origin.y + visible_height >= document_height - 2
-        )
-
         self.transcript_view.textStorage().setAttributedString_(cocoa_text)
         length = self.transcript_view.textStorage().length()
         location = min(selected.location, length)
         selection_length = min(selected.length, length - location)
         self.transcript_view.setSelectedRange_((location, selection_length))
         self.markdown_display_map = markdown_display_map
-        self._saved_scroll_origin = origin
-        self._scroll_to_end = at_bottom and selected.length == 0
 
     @objc.python_method
     def layout_content(
@@ -664,17 +652,9 @@ class TabContentView(NSView):
             ((0.0, 0.0), (transcript_width, transcript_height))
         )
         self.transcript_view.setNeedsDisplay_(True)
-        if getattr(self, "_scroll_to_end", True):
-            self.transcript_view.scrollRangeToVisible_(
-                (self.transcript_view.textStorage().length(), 0)
-            )
-        else:
-            clip = self.transcript_scroll.contentView()
-            # Restore vertical position only; horizontal origin must stay 0 now
-            # that the document view is pinned at (0, 0).
-            saved = self._saved_scroll_origin
-            clip.scrollToPoint_((0.0, float(saved.y)))
-            self.transcript_scroll.reflectScrolledClipView_(clip)
+        self.transcript_view.scrollRangeToVisible_(
+            (self.transcript_view.textStorage().length(), 0)
+        )
 
     @objc.python_method
     def input_text(self) -> str:

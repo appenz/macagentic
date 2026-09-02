@@ -214,6 +214,13 @@ def test_transcript_scrolls_to_new_long_query_and_output(monkeypatch) -> None:
     ui._main_thread_update(agent.id)
     driver.spin()
     assert_scrolled_to_bottom()
+
+    driver.type_text("follow up query")
+    driver.press_return()
+    assert driver.wait_for(
+        lambda: "follow up query" in driver.conversation_text()
+    )
+    assert_scrolled_to_bottom()
     ui.close_window()
 
 
