@@ -22,6 +22,7 @@ def test_user_config_overrides_project_config(
     user_config.write_text(
         'model = "openai/user-model"\n'
         'openai_api_key = "user-key"\n'
+        'anthropic_api_key = "anthropic-user-key"\n'
         'brave_api_key = "brave-user-key"\n'
         "[models]\n"
         'slow = "openai/user-slow"\n'
@@ -34,6 +35,7 @@ def test_user_config_overrides_project_config(
 
     assert config.model == "openai/user-model"
     assert config.openai_api_key == "user-key"
+    assert config.anthropic_api_key == "anthropic-user-key"
     assert config.brave_api_key == "brave-user-key"
     assert config.custom_prompt == "Project instructions"
     assert config.mounts == {"notes": "~/notes"}
@@ -53,3 +55,5 @@ def test_default_models_match_medium_default(tmp_path: Path, monkeypatch) -> Non
 
     assert config.model == DEFAULT_MODEL
     assert config.models == DEFAULT_MODELS
+    assert config.models["slow"] == "anthropic/claude-fable-5-1"
+    assert config.anthropic_api_key == ""

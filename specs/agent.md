@@ -71,7 +71,8 @@ class Agent:
 
 mini-SWE-agent provides the model and environment foundations; macAgentic
 owns its smaller agent loop rather than using `DefaultAgent`. Model calls
-use LiteLLM's native Responses API.
+use LiteLLM's native Responses API. LiteLLM model strings may target
+Anthropic (for example `anthropic/claude-fable-5-1`) as well as OpenAI.
 
 ## Filesystem
 

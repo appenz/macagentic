@@ -61,6 +61,16 @@ def test_projection_renders_model_switch() -> None:
     assert render_conversation(events) == "Switching to gpt-5.6-luna\n\n"
 
 
+def test_projection_renders_anthropic_model_switch() -> None:
+    events = (
+        ConversationEvent(
+            "model_switch",
+            {"model": "anthropic/claude-fable-5-1"},
+        ),
+    )
+    assert render_conversation(events) == "Switching to claude-fable-5-1\n\n"
+
+
 def test_projection_hides_system_and_user_message_copies() -> None:
     events = (
         ConversationEvent(

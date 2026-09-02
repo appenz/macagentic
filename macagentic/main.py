@@ -85,6 +85,8 @@ def main() -> None:
     config = load_config()
     if config.openai_api_key:
         os.environ["OPENAI_API_KEY"] = config.openai_api_key
+    if config.anthropic_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = config.anthropic_api_key
     if config.brave_api_key:
         os.environ["BRAVE_API_KEY"] = config.brave_api_key
     task = _initial_task(args)

@@ -9,7 +9,7 @@ MODEL_TIERS = ("fast", "medium", "slow")
 DEFAULT_MODELS = {
     "fast": "openai/gpt-5.6-luna",
     "medium": "openai/gpt-5.6-terra",
-    "slow": "openai/gpt-5.6-sol",
+    "slow": "anthropic/claude-fable-5-1",
 }
 DEFAULT_MODEL = DEFAULT_MODELS["medium"]
 
@@ -49,6 +49,7 @@ class MacAgenticConfig:
         default_factory=lambda: dict(DEFAULT_MODELS)
     )
     openai_api_key: str = ""
+    anthropic_api_key: str = ""
     brave_api_key: str = ""
     custom_prompt: str = ""
     mounts: dict[str, str] = field(default_factory=dict)
@@ -83,6 +84,7 @@ def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
         model=str(data.get("model", DEFAULT_MODEL) or DEFAULT_MODEL),
         models=_parse_models(data),
         openai_api_key=str(data.get("openai_api_key", "") or ""),
+        anthropic_api_key=str(data.get("anthropic_api_key", "") or ""),
         brave_api_key=str(data.get("brave_api_key", "") or ""),
         custom_prompt=str(data.get("custom_prompt", "") or ""),
         mounts=dict(mounts),

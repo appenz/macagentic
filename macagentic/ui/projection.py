@@ -61,7 +61,7 @@ def render_history(events: Iterable[ConversationEvent]) -> str:
 
 
 def display_model_name(model_name: str) -> str:
-    for prefix in ("openai/responses/", "openai/"):
+    for prefix in ("openai/responses/", "openai/", "anthropic/"):
         if model_name.startswith(prefix):
             return model_name.removeprefix(prefix)
     return model_name
