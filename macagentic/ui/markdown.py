@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from hashlib import sha1
+import logging
 import re
 
 from Cocoa import (
@@ -31,7 +32,10 @@ from markdown_it import MarkdownIt
 from macagentic.ui.math_render import (
     MathBitmap,
     MathBitmapCache,
+    MathRenderError,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 FONT_SIZE = 14.0
 LINE_HEIGHT = FONT_SIZE * 1.2
@@ -483,8 +487,13 @@ class MarkdownRenderer:
     """Reusable Markdown parser and Cocoa attributed-string renderer."""
 
     def __init__(self) -> None:
+        # Pandoc's tex_math_dollars rules: no whitespace just inside the
+        # delimiters and no digit right after the closing `$`, so prose like
+        # "$3,400/year ... > $10k" is currency, not math.
         self._parser = (
-            MarkdownIt().enable("table").use(dollarmath_plugin, allow_digits=True)
+            MarkdownIt()
+            .enable("table")
+            .use(dollarmath_plugin, allow_space=False, allow_digits=False)
         )
 
     def render(
@@ -528,6 +537,7 @@ class MarkdownRenderer:
                 block, segments = self._render_math_block(
                     token,
                     color,
+                    source=source,
                     display_math=display_math,
                     parse_source=parse_source,
                     anchors=anchors,
@@ -719,6 +729,7 @@ class MarkdownRenderer:
         token,
         color,
         *,
+        source,
         display_math,
         parse_source,
         anchors,
@@ -741,15 +752,26 @@ class MarkdownRenderer:
             md_end = _map_parse_to_source(md_end, anchors)
         block = NSMutableAttributedString.alloc().init()
         rendered_start = block.length()
-        _, _, bitmap = _append_math_attachment(
-            block,
-            latex,
-            inline=False,
-            color=color,
-            font_size=FONT_SIZE,
-            math_bitmap_cache=math_bitmap_cache,
-            scale_factor=scale_factor,
-        )
+        try:
+            _, _, bitmap = _append_math_attachment(
+                block,
+                latex,
+                inline=False,
+                color=color,
+                font_size=FONT_SIZE,
+                math_bitmap_cache=math_bitmap_cache,
+                scale_factor=scale_factor,
+            )
+        except MathRenderError as error:
+            _LOGGER.warning("Display math fell back to source text: %s", error)
+            fallback = source[md_start:md_end].strip() or f"$${latex}$$"
+            block.appendAttributedString_(_attributed(fallback, color=color))
+            block.addAttribute_value_range_(
+                NSParagraphStyleAttributeName,
+                _paragraph_style(),
+                (0, block.length()),
+            )
+            return block, [(rendered_start, block.length(), md_start, md_end)]
         line_height = _math_line_height(bitmap)
         style = NSMutableParagraphStyle.alloc().init()
         style.setAlignment_(NSTextAlignmentCenter)
@@ -1032,15 +1054,21 @@ class MarkdownRenderer:
                 md_start = inline_md_start + pos
                 md_end = md_start + len(source)
                 rendered_start = result.length()
-                _append_math_attachment(
-                    result,
-                    latex,
-                    inline=True,
-                    color=color,
-                    font_size=font.pointSize(),
-                    math_bitmap_cache=math_bitmap_cache,
-                    scale_factor=scale_factor,
-                )
+                try:
+                    _append_math_attachment(
+                        result,
+                        latex,
+                        inline=True,
+                        color=color,
+                        font_size=font.pointSize(),
+                        math_bitmap_cache=math_bitmap_cache,
+                        scale_factor=scale_factor,
+                    )
+                except MathRenderError as error:
+                    _LOGGER.warning("Inline math fell back to source text: %s", error)
+                    result.appendAttributedString_(
+                        _attributed(source, color=color, font=font)
+                    )
                 segments.append((rendered_start, result.length(), md_start, md_end))
                 cursor = pos + len(source)
                 index += 1

@@ -69,26 +69,29 @@ Each Cocoa tab owns:
 
 ```python
 class UITab:
-    def __init__(
-        self,
-        tab_id: int,
-        agent: Agent,
-        *,
-        title: str = "New Agent",
-        input_text: str = "",
-    ) -> None:
-        self.id = tab_id
-        self.agent = agent
-        self.title = title
-        self.input_text = input_text
-        self.tool_call_descriptions: dict[str, str] = {}
-        self.display_event_index = 0
-        self.math_bitmap_cache = MathBitmapCache()
-        self.expanded_block_ids: set[str] = set()
-        self.tab_bar_item: TabBarItemView | None = None
-        self.content_view: TabContentView | None = None
-        self.thread: threading.Thread | None = None
-        self.requests: queue.Queue[str] = queue.Queue()
+    # Identity and agent
+    id: int  # The Agent's process-local ID.
+    agent: Agent
+
+    # Persisted state (see session restore)
+    title: str
+    input_text: str  # Synchronized from input_text_view for persistence.
+
+    # Display state
+    tool_call_descriptions: dict[str, str]  # Keyed by tool call ID.
+    display_event_index: int  # Next conversation-log entry to render.
+    math_bitmap_cache: MathBitmapCache
+    expanded_block_ids: set[str]
+
+    # Persistent Cocoa views, created lazily on first mount
+    tab_bar_item: TabBarItemView | None
+    content_view: TabContentView | None
+
+    # Execution state
+    thread: threading.Thread | None  # Agent orchestration thread, if running.
+    requests: queue.Queue[str]  # Queued requests consumed by `thread`.
+
+    def __init__(self, tab_id: int, agent: Agent, *, title: str, input_text: str) -> None: ...
 
     def running(self) -> bool: ...
 ```

@@ -317,23 +317,89 @@ def test_math_bitmap_cache_produces_png() -> None:
     assert len(bytes(png)) > 1000
 
 
-def test_markdown_math_render_failure_raises() -> None:
+def test_markdown_inline_math_render_failure_falls_back_to_source() -> None:
     renderer = MarkdownRenderer()
+    source = "Bad $x^2$ math"
     with patch.object(
         MathBitmapCache,
         "render",
         side_effect=MathRenderError("bad math"),
     ):
-        try:
-            _render(
-                renderer,
-                "Bad $x^2$ math",
-                NSColor.blackColor(),
-                math_bitmap_cache=MathBitmapCache(),
-            )
-        except MathRenderError:
-            return
-    raise AssertionError("expected MathRenderError")
+        rendered, display_map = renderer.render(
+            source,
+            NSColor.blackColor(),
+            math_bitmap_cache=MathBitmapCache(),
+        )
+    text = str(rendered.string())
+    assert text == source
+    assert "\ufffc" not in text
+    assert display_map.markdown_for_range((0, len(text))) == source
+
+
+def test_markdown_display_math_render_failure_falls_back_to_source() -> None:
+    renderer = MarkdownRenderer()
+    source = "Before\n\n$$\nx^2\n$$\n\nAfter"
+    with patch.object(
+        MathBitmapCache,
+        "render",
+        side_effect=MathRenderError("bad math"),
+    ):
+        rendered, display_map = renderer.render(
+            source,
+            NSColor.blackColor(),
+            math_bitmap_cache=MathBitmapCache(),
+        )
+    text = str(rendered.string())
+    assert "\ufffc" not in text
+    assert "$$\nx^2\n$$" in text
+    assert display_map.markdown_for_range((0, len(text))) == source
+
+
+def test_markdown_invalid_latex_renders_as_text() -> None:
+    """Real ziamath failure (raw `&` / `>` produce invalid MathML)."""
+    renderer = MarkdownRenderer()
+    source = "so $a & b > c$ here"
+    rendered = _render(
+        renderer,
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=MathBitmapCache(),
+    )
+    assert str(rendered.string()) == source
+
+
+def test_markdown_currency_pairs_are_not_math() -> None:
+    renderer = MarkdownRenderer()
+    cache = MathBitmapCache()
+    source = (
+        "1kW is $3,400/year at PG&E residential rates, "
+        "so this is likely > $10k/year"
+    )
+    rendered = _render(
+        renderer,
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=cache,
+    )
+    assert str(rendered.string()) == source
+    assert len(cache) == 0
+
+
+def test_markdown_currency_and_math_on_same_line() -> None:
+    renderer = MarkdownRenderer()
+    cache = MathBitmapCache()
+    source = "costs $5 and $10 total, so $x^2$ applies"
+    rendered = _render(
+        renderer,
+        source,
+        NSColor.blackColor(),
+        math_bitmap_cache=cache,
+    )
+    text = str(rendered.string())
+    assert text.startswith("costs $5 and $10 total, so ")
+    assert "\ufffc" in text
+    assert "$x^2$" not in text
+    assert len(cache) == 1
 
 
 def test_markdown_for_selection_preserves_math_markdown() -> None:

@@ -15,7 +15,10 @@ the copy source map. `core.py` does not import `math_render`.
   tab’s cache is passed into `MarkdownRenderer.render()`.
 - Before parsing, `$$...$$` spans are lifted to top-level placeholders so
   CommonMark lists cannot split display math (e.g. a lone `+` line).
-- Render failure raises; there is no monospace fallback.
+- `MathBitmapCache.render` raises `MathRenderError` on failure. `markdown.py`
+  catches it and renders the literal Markdown source (`$...$` / `$$...$$`) as
+  plain text in the surrounding font, logging a warning. One bad expression
+  must never fail the whole transcript render.
 - WebKit rasterization is single-flight on the AppKit main thread.
 - Copy uses the current `MarkdownDisplayMap.markdown_for_range()` only — never
   attachment attributes or `math_render`.
@@ -69,7 +72,10 @@ class MarkdownRenderer:
     ) -> tuple[NSMutableAttributedString, MarkdownDisplayMap]: ...
 ```
 
-`render` parses with `dollarmath_plugin` (`allow_digits=True`) and handles
+`render` parses with `dollarmath_plugin` using Pandoc's `tex_math_dollars`
+rules (`allow_space=False`, `allow_digits=False`): no whitespace directly
+inside the delimiters and no digit directly after the closing `$`. This keeps
+currency such as `$3,400/year ... > $10k` out of math. It handles
 `math_inline`, `math_block`, and `math_block_label`. Math size follows the
 surrounding font; pass window backing scale as `scale_factor`.
 
