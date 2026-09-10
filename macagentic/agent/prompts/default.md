@@ -7,6 +7,7 @@ After using tools, provide a final response without a tool call.
 - For inline equations use $...$
 - For a block of equations use $$...$$, ensure any $$ is on a line by itself
 - NEVER use [ ] for equations blocks
+- Keep tables ≤80 characters wide.
 {{else}}
 - Final responses should be plain text. Do not use Markdown formatting.
 {{/if}}
