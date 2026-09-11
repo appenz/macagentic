@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from scripts.manage_tools import (
+    TOOLS_ROOT,
     ToolError,
     discover_tools,
     install_tools,
@@ -63,9 +64,40 @@ def test_install_refuses_to_replace_existing_command(tmp_path) -> None:
 
 def test_writes_aggregated_prompt(tmp_path) -> None:
     tools_root = tmp_path / "tools"
+    make_tool(tools_root, "weather")
     make_tool(tools_root, "things")
     output = tmp_path / ".build" / "tools.md"
 
     write_prompt(discover_tools(tools_root), output)
 
-    assert output.read_text() == "# Available Tools\n\n## `things`\n\nUse things.\n"
+    assert output.read_text() == "Use things.\n\nUse weather.\n"
+
+
+def test_repo_tools_prompt_is_compact(tmp_path) -> None:
+    output = tmp_path / "tools.md"
+    write_prompt(discover_tools(TOOLS_ROOT), output)
+    text = output.read_text()
+
+    assert not any(line.startswith("#") for line in text.splitlines())
+    assert text == (
+        "`gwsx` — Google Workspace. First argument is always a configured "
+        "account alias.\n"
+        "- Accounts: `gwsx account add <alias>` · `gwsx account delete <alias>` · "
+        "`gwsx account list`\n"
+        "- Run: `gwsx <alias> <gws arguments...>`\n"
+        "- Re-auth: `gwsx <alias> auth login --scopes drive,gmail`\n"
+        "- Example: `gwsx private drive files list --params '{\"pageSize\": 5}'`\n"
+        "\n"
+        "`noteheader` — meeting-note header with attendees and location.\n"
+        "- `noteheader`\n"
+        "- `noteheader --ical-uid \"<uid>\"`\n"
+        "\n"
+        "`things` — user's to-do list.\n"
+        "- `things new \"<title>\"`\n"
+        "- `things list` — incomplete Today items with ids\n"
+        "- `things complete <id>`\n"
+        "\n"
+        "`websearch` — live web search via Brave.\n"
+        "- `websearch \"query\"`\n"
+        "- `websearch \"query\" --count N` — 1–20 results, default 5\n"
+    )

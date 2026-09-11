@@ -1,8 +1,5 @@
-### `gwsx` command for Google Workspace apps with explicit accounts.
-- Always choose a configured account alias as the first argument.
-- Add an account interactively: `gwsx account add <alias>`
-- Delete an account and its local credentials: `gwsx account delete <alias>`
-- List configured accounts: `gwsx account list`
-- Pass Google Workspace CLI arguments through unchanged: `gwsx <alias> <gws arguments...>`
+`gwsx` — Google Workspace. First argument is always a configured account alias.
+- Accounts: `gwsx account add <alias>` · `gwsx account delete <alias>` · `gwsx account list`
+- Run: `gwsx <alias> <gws arguments...>`
+- Re-auth: `gwsx <alias> auth login --scopes drive,gmail`
 - Example: `gwsx private drive files list --params '{"pageSize": 5}'`
-- Re-authenticate an account: `gwsx <alias> auth login --scopes drive,gmail`

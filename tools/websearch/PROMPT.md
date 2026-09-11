@@ -1,3 +1,3 @@
-### `websearch` command for live web lookups via Brave Search.
-- Search the web: `websearch "your query"`
-- Limit results (1-20, default 5): `websearch "your query" --count 10`
+`websearch` — live web search via Brave.
+- `websearch "query"`
+- `websearch "query" --count N` — 1–20 results, default 5
