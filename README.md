@@ -31,7 +31,8 @@ You can configure:
 
 - `model` — default model
 - `models` — fast, medium, and slow model choices
-- `openai_api_key`, `anthropic_api_key`, and `brave_api_key` — service credentials
+- `openai_api_key`, `anthropic_api_key`, `inception_api_key`, and
+  `brave_api_key` — service credentials
 - `custom_prompt` — additional system instructions
 - `mounts` — directories exposed to agent workspaces
 

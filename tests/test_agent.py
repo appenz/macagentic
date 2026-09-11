@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from macagentic.agent import Agent, ConversationLog, ResponseModel
 from macagentic.agent.agent import load_system_prompt
+from macagentic.agent.model import MERCURY_2_5, MERCURY_2_5_METADATA
 from macagentic.agent.skills import Skill, SkillCatalog
 
 
@@ -246,6 +247,27 @@ def test_response_model_accepts_plain_text_and_reasoning_items() -> None:
         {"role": "system", "content": "Instructions"},
         {"type": "reasoning", "id": "reasoning-1"},
     ]
+
+
+def test_response_model_registers_missing_mercury_metadata(monkeypatch) -> None:
+    registered = []
+
+    def missing_info(_model):
+        raise ValueError("not registered")
+
+    monkeypatch.setattr(
+        "macagentic.agent.model.litellm.get_model_info",
+        missing_info,
+    )
+    monkeypatch.setattr(
+        "macagentic.agent.model.litellm.register_model",
+        registered.append,
+    )
+
+    model = ResponseModel(model_name=MERCURY_2_5)
+
+    assert model.model_name == MERCURY_2_5
+    assert registered == [{MERCURY_2_5: MERCURY_2_5_METADATA}]
 
 
 def test_agent_copies_every_message_into_conversation_log(
