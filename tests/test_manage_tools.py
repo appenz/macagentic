@@ -62,6 +62,21 @@ def test_install_refuses_to_replace_existing_command(tmp_path) -> None:
         install_tools(discover_tools(tools_root), bin_dir)
 
 
+def test_install_updates_managed_symlink_from_another_checkout(tmp_path) -> None:
+    old_root = tmp_path / "old" / "tools"
+    new_root = tmp_path / "new" / "tools"
+    bin_dir = tmp_path / "bin"
+    make_tool(old_root, "things")
+    make_tool(new_root, "things")
+    bin_dir.mkdir()
+    (bin_dir / "things").symlink_to((old_root / "things" / "things").resolve())
+
+    tools = discover_tools(new_root)
+    install_tools(tools, bin_dir)
+
+    assert (bin_dir / "things").resolve() == tools[0].launcher.resolve()
+
+
 def test_writes_aggregated_prompt(tmp_path) -> None:
     tools_root = tmp_path / "tools"
     make_tool(tools_root, "weather")
@@ -85,6 +100,8 @@ def test_repo_tools_prompt_is_compact(tmp_path) -> None:
         "- Accounts: `gwsx account add <alias>` · `gwsx account delete <alias>` · "
         "`gwsx account list`\n"
         "- Run: `gwsx <alias> <gws arguments...>`\n"
+        "- Gmail helpers: `gwsx <alias> gmail +active-threads` (id + snippet) · "
+        "`gwsx <alias> gmail +thread --id <thread-id>`\n"
         "- Re-auth: `gwsx <alias> auth login --scopes drive,gmail`\n"
         "- Example: `gwsx private drive files list --params '{\"pageSize\": 5}'`\n"
         "\n"

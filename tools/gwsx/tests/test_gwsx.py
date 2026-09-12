@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -12,6 +14,41 @@ SPEC = importlib.util.spec_from_file_location("gwsx_tool", TOOL_PATH)
 assert SPEC is not None and SPEC.loader is not None
 gwsx = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gwsx)
+
+
+def _b64(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+def _message(
+    message_id: str,
+    *,
+    internal_date: str,
+    labels: list[str],
+    subject: str = "Subject",
+    body: str = "body",
+    mime: str = "text/plain",
+    in_reply_to: str | None = None,
+) -> dict:
+    headers = [
+        {"name": "Subject", "value": subject},
+        {"name": "From", "value": "sender@example.com"},
+        {"name": "To", "value": "me@example.com"},
+        {"name": "Date", "value": "Fri, 11 Sep 2026 12:00:00 +0000"},
+    ]
+    if in_reply_to is not None:
+        headers.append({"name": "In-Reply-To", "value": in_reply_to})
+    return {
+        "id": message_id,
+        "threadId": "thread-1",
+        "internalDate": internal_date,
+        "labelIds": labels,
+        "payload": {
+            "mimeType": mime,
+            "headers": headers,
+            "body": {"data": _b64(body)},
+        },
+    }
 
 
 @pytest.fixture
@@ -212,4 +249,175 @@ def test_rejects_dotenv_auth_override(
 
 def test_help_does_not_require_gws(isolated_config, capsys) -> None:
     assert gwsx.main([]) == 0
-    assert "gwsx account add <alias>" in capsys.readouterr().out
+    help_text = capsys.readouterr().out
+    assert "gwsx account add <alias>" in help_text
+    assert "gmail +active-threads" in help_text
+
+
+def test_select_active_messages_from_oldest_unread() -> None:
+    messages = [
+        _message("1", internal_date="1", labels=["INBOX"]),
+        _message("2", internal_date="2", labels=["INBOX", "UNREAD"]),
+        _message("3", internal_date="3", labels=["SENT"]),
+        _message("4", internal_date="4", labels=["INBOX", "UNREAD"]),
+        _message("5", internal_date="5", labels=["SENT"]),
+    ]
+    selected = gwsx.select_active_messages(messages, include_all=False)
+    assert [message["id"] for message in selected] == ["2", "3", "4", "5"]
+
+
+def test_select_active_messages_falls_back_to_newest() -> None:
+    messages = [
+        _message("1", internal_date="1", labels=["INBOX"]),
+        _message("2", internal_date="2", labels=["SENT"]),
+    ]
+    selected = gwsx.select_active_messages(messages, include_all=False)
+    assert [message["id"] for message in selected] == ["2"]
+
+
+def test_build_thread_view_truncates_body_and_preserves_reply_linkage() -> None:
+    thread = {
+        "id": "thread-1",
+        "messages": [
+            _message(
+                "m1",
+                internal_date="10",
+                labels=["INBOX", "UNREAD"],
+                body="Hello world",
+                in_reply_to="<parent@example.com>",
+            )
+        ],
+    }
+    view = gwsx.build_thread_view(
+        thread,
+        include_all=False,
+        max_body_chars=5,
+        max_thread_chars=100,
+    )
+    message = view["messages"][0]
+    assert view["selection"] == "oldest-unread-and-later"
+    assert message["body"] == "Hello"
+    assert message["bodyTruncated"] is True
+    assert message["bodyChars"] == 11
+    assert message["inReplyTo"] == "<parent@example.com>"
+
+
+def test_thread_char_budget_preserves_newest_messages() -> None:
+    thread = {
+        "id": "thread-1",
+        "messages": [
+            _message("1", internal_date="1", labels=["INBOX", "UNREAD"], body="AAAA"),
+            _message("2", internal_date="2", labels=["INBOX"], body="BBBB"),
+            _message("3", internal_date="3", labels=["SENT"], body="CCCC"),
+        ],
+    }
+    view = gwsx.build_thread_view(
+        thread,
+        include_all=True,
+        max_body_chars=100,
+        max_thread_chars=6,
+    )
+    bodies = [message["body"] for message in view["messages"]]
+    assert bodies == ["", "BB", "CCCC"]
+    assert view["messages"][0]["omittedForBudget"] is True
+    assert view["messages"][1]["bodyTruncated"] is True
+
+
+def test_html_body_is_converted_and_attachments_are_skipped() -> None:
+    html_body = _b64("<p>Hello <b>there</b></p><script>bad()</script>")
+    attachment = _b64("secret-bytes")
+    message = {
+        "id": "m1",
+        "threadId": "thread-1",
+        "internalDate": "10",
+        "labelIds": ["INBOX", "UNREAD"],
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [{"name": "Subject", "value": "HTML"}],
+            "parts": [
+                {
+                    "mimeType": "text/html",
+                    "filename": "",
+                    "body": {"data": html_body},
+                },
+                {
+                    "mimeType": "application/pdf",
+                    "filename": "file.pdf",
+                    "body": {"data": attachment},
+                },
+            ],
+        },
+    }
+    normalized = gwsx.normalize_message(message, max_body_chars=100)
+    assert "Hello" in normalized["body"]
+    assert "there" in normalized["body"]
+    assert "bad()" not in normalized["body"]
+    assert "secret-bytes" not in normalized["body"]
+
+
+def test_active_threads_command_outputs_tsv(
+    monkeypatch,
+    isolated_config,
+    capsys,
+) -> None:
+    profile = isolated_config / "accounts" / "private"
+    profile.mkdir(parents=True)
+    monkeypatch.setattr(gwsx.shutil, "which", lambda _name: "/bin/gws")
+
+    def fake_invoke(arguments, profile_path, *, executable=None):
+        assert profile_path == profile
+        assert arguments[3] == "list"
+        params = json.loads(arguments[arguments.index("--params") + 1])
+        assert params["fields"] == "threads(id,snippet)"
+        assert params["maxResults"] == 10
+        return {
+            "threads": [
+                {"id": "t1", "snippet": "Short preview"},
+                {"id": "t2", "snippet": "X" * 60},
+                {"id": "t3"},
+            ]
+        }
+
+    monkeypatch.setattr(gwsx, "invoke_gws_json", fake_invoke)
+    assert gwsx.main(["private", "gmail", "+active-threads", "--max", "10"]) == 0
+    assert capsys.readouterr().out == (
+        "t1\tShort preview\n"
+        f"t2\t{'X' * 60}\n"
+        "t3\t(no snippet)\n"
+    )
+
+
+def test_thread_command_defaults_to_text_selection(
+    monkeypatch,
+    isolated_config,
+    capsys,
+) -> None:
+    profile = isolated_config / "accounts" / "private"
+    profile.mkdir(parents=True)
+    monkeypatch.setattr(gwsx.shutil, "which", lambda _name: "/bin/gws")
+
+    def fake_invoke(arguments, profile_path, *, executable=None):
+        return {
+            "id": "thread-1",
+            "messages": [
+                _message("1", internal_date="1", labels=["INBOX"], body="old"),
+                _message(
+                    "2",
+                    internal_date="2",
+                    labels=["INBOX", "UNREAD"],
+                    body="new unread",
+                ),
+                _message("3", internal_date="3", labels=["SENT"], body="reply"),
+            ],
+        }
+
+    monkeypatch.setattr(gwsx, "invoke_gws_json", fake_invoke)
+    assert gwsx.main(["private", "gmail", "+thread", "--id", "thread-1"]) == 0
+    output = capsys.readouterr().out
+    assert "threadId: thread-1" in output
+    assert "selection: oldest-unread-and-later" in output
+    assert "id: 2" in output
+    assert "id: 3" in output
+    assert "id: 1" not in output
+    assert "new unread" in output
+    assert "reply" in output

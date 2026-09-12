@@ -69,6 +69,16 @@ def _resolved_symlink(path: Path) -> Path:
     return target.resolve()
 
 
+def _is_managed_tool_symlink(path: Path, tool_name: str) -> bool:
+    """True when path is a symlink to tools/<name>/<name> from any checkout."""
+    if not path.is_symlink():
+        return False
+    target = _resolved_symlink(path)
+    return target.name == tool_name and target.parent.name == tool_name and (
+        len(target.parts) >= 3 and target.parent.parent.name == "tools"
+    )
+
+
 def install_tools(tools: list[Tool], bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     for tool in tools:
@@ -76,6 +86,13 @@ def install_tools(tools: list[Tool], bin_dir: Path) -> None:
         target = tool.launcher.resolve()
         if destination.is_symlink() and _resolved_symlink(destination) == target:
             print(f"already installed: {destination}")
+            continue
+        if destination.is_symlink() and _is_managed_tool_symlink(
+            destination, tool.name
+        ):
+            destination.unlink()
+            destination.symlink_to(target)
+            print(f"updated: {destination} -> {target}")
             continue
         if destination.exists() or destination.is_symlink():
             raise ToolError(f"Refusing to replace existing path: {destination}")
