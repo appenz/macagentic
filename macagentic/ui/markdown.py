@@ -1275,6 +1275,7 @@ class MarkdownRenderer:
         style.setFirstLineHeadIndent_(8.0)
         style.setHeadIndent_(8.0)
         style.setLineBreakMode_(NSLineBreakByTruncatingTail)
+        style.setAllowsDefaultTighteningForTruncation_(False)
         result.addAttribute_value_range_(
             NSParagraphStyleAttributeName,
             style,

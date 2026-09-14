@@ -234,6 +234,7 @@ def test_markdown_heavy_block_layout() -> None:
     assert style.firstLineHeadIndent() == 8.0
     assert style.headIndent() == 8.0
     assert style.lineBreakMode() == NSLineBreakByTruncatingTail
+    assert not style.allowsDefaultTighteningForTruncation()
     assert style.paragraphSpacingBefore() == PARAGRAPH_GAP
 
 
