@@ -95,7 +95,7 @@ def main() -> None:
     custom_instructions = _custom_instructions(args, config)
     tool_instructions = _tool_instructions(args)
     skill_catalog = load_available_skills()
-    model_name = args.model or config.model
+    model_name = args.model or config.models["medium"]
     app.configure(
         workspace=Path.cwd(),
         model_name=model_name,

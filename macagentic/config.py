@@ -8,10 +8,9 @@ from typing import Any
 MODEL_TIERS = ("fast", "medium", "slow")
 DEFAULT_MODELS = {
     "fast": "inception/mercury-2.5",
-    "medium": "openai/gpt-5.6-terra",
+    "medium": "openai/gpt-6-sol",
     "slow": "anthropic/claude-fable-5-1",
 }
-DEFAULT_MODEL = DEFAULT_MODELS["medium"]
 
 
 def _project_root() -> Path:
@@ -44,7 +43,6 @@ def _deep_merge(
 
 @dataclass(frozen=True)
 class MacAgenticConfig:
-    model: str = DEFAULT_MODEL
     models: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_MODELS)
     )
@@ -82,7 +80,6 @@ def _from_dict(data: dict[str, Any]) -> MacAgenticConfig:
     ):
         raise ValueError("Config 'mounts' must map names to directory paths.")
     return MacAgenticConfig(
-        model=str(data.get("model", DEFAULT_MODEL) or DEFAULT_MODEL),
         models=_parse_models(data),
         openai_api_key=str(data.get("openai_api_key", "") or ""),
         anthropic_api_key=str(data.get("anthropic_api_key", "") or ""),

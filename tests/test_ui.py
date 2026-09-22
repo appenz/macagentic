@@ -5,7 +5,17 @@ import pytest
 
 pytest.importorskip("Cocoa", reason="Cocoa UI requires macOS")
 
+from Cocoa import (
+    NSAttributedString,
+    NSColor,
+    NSFont,
+    NSFontAttributeName,
+    NSPasteboard,
+    NSRTFPboardType,
+)
+
 from macagentic.agent import ConversationLog, UsageTracker
+from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
 from macagentic.ui.projection import render_history
 from macagentic.ui.testing import UITestDriver
 from macagentic.ui.updates import SetTabTitle, SetToolCallDescription
@@ -84,6 +94,52 @@ def open_test_ui(monkeypatch):
     ui.start(dont_run_app=True)
     ui.hotkey_pressed(activate=False)
     return ui, UITestDriver(ui)
+
+
+@pytest.mark.uitest
+def test_input_pastes_rich_clipboard_content_as_plain_text(monkeypatch) -> None:
+    ui, driver = open_test_ui(monkeypatch)
+    rich_text = NSAttributedString.alloc().initWithString_attributes_(
+        "**NOT**",
+        {NSFontAttributeName: NSFont.boldSystemFontOfSize_(28.0)},
+    )
+    pasteboard = NSPasteboard.generalPasteboard()
+    pasteboard.clearContents()
+    assert pasteboard.writeObjects_([rich_text])
+
+    driver.press_cmd("v")
+
+    assert driver.input_text() == "**NOT**"
+    pasted_font, _ = ui.input_field.textStorage().attribute_atIndex_effectiveRange_(
+        NSFontAttributeName,
+        0,
+        None,
+    )
+    assert pasted_font.pointSize() == FONT_SIZE
+
+
+@pytest.mark.uitest
+def test_transcript_copy_preserves_rendered_table_and_rich_text(
+    monkeypatch,
+) -> None:
+    ui, driver = open_test_ui(monkeypatch)
+    content = ui.active_content_view
+    rendered, metadata = MarkdownRenderer().render(
+        "**Bold** before\n\n"
+        "| Name | Count |\n|---|---:|\n| A | 2 |\n\n"
+        "after",
+        NSColor.blackColor(),
+    )
+    content.set_transcript(rendered, metadata)
+    text = str(rendered.string())
+    start = text.index("Count") + 2
+    end = text.index("after") + 2
+    content.transcript_view.setSelectedRange_((start, end - start))
+
+    content.transcript_view.copy_(None)
+
+    assert driver.clipboard() == text[start:end]
+    assert NSRTFPboardType in NSPasteboard.generalPasteboard().types()
 
 
 @pytest.mark.uitest

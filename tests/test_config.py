@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from macagentic.config import DEFAULT_MODELS, DEFAULT_MODEL, load_config
+from macagentic.config import DEFAULT_MODELS, load_config
 
 
 def test_user_config_overrides_project_config(
@@ -11,7 +11,6 @@ def test_user_config_overrides_project_config(
     project_config = project / "config" / "config.toml"
     project_config.parent.mkdir(parents=True)
     project_config.write_text(
-        'model = "openai/project-model"\n'
         'custom_prompt = "Project instructions"\n'
         "[models]\n"
         'fast = "openai/project-fast"\n'
@@ -20,7 +19,6 @@ def test_user_config_overrides_project_config(
     user_config = home / ".config" / "macagentic" / "config.toml"
     user_config.parent.mkdir(parents=True)
     user_config.write_text(
-        'model = "openai/user-model"\n'
         'openai_api_key = "user-key"\n'
         'anthropic_api_key = "anthropic-user-key"\n'
         'inception_api_key = "inception-user-key"\n'
@@ -34,7 +32,6 @@ def test_user_config_overrides_project_config(
 
     config = load_config(project)
 
-    assert config.model == "openai/user-model"
     assert config.openai_api_key == "user-key"
     assert config.anthropic_api_key == "anthropic-user-key"
     assert config.inception_api_key == "inception-user-key"
@@ -46,7 +43,7 @@ def test_user_config_overrides_project_config(
     assert config.models["slow"] == "openai/user-slow"
 
 
-def test_default_models_match_medium_default(tmp_path: Path, monkeypatch) -> None:
+def test_default_models(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "project"
     (project / "config").mkdir(parents=True)
     home = tmp_path / "home"
@@ -55,7 +52,6 @@ def test_default_models_match_medium_default(tmp_path: Path, monkeypatch) -> Non
 
     config = load_config(project)
 
-    assert config.model == DEFAULT_MODEL
     assert config.models == DEFAULT_MODELS
     assert config.models["fast"] == "inception/mercury-2.5"
     assert config.models["slow"] == "anthropic/claude-fable-5-1"

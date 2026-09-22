@@ -58,8 +58,9 @@ from macagentic.ui.helpers import request_fast_text
 from macagentic.ui.math_render import MathBitmapCache
 from macagentic.ui.markdown import (
     FONT_SIZE,
-    MarkdownDisplayMap,
+    MarkdownRenderMetadata,
     MarkdownRenderer,
+    prepare_copy,
 )
 from macagentic.ui.projection import (
     display_model_name,
@@ -260,24 +261,39 @@ class ConversationTextView(NSTextView):
         objc.super(ConversationTextView, self).keyDown_(event)
 
     def copy_(self, _sender):
-        display_map = (
-            self.content_view.markdown_display_map
-            if self.content_view is not None
-            else None
-        )
-        if display_map is None:
-            objc.super(ConversationTextView, self).copy_(None)
-            return
         selected = self.selectedRange()
         if selected.length == 0:
             objc.super(ConversationTextView, self).copy_(None)
             return
-        markdown = display_map.markdown_for_range(
-            (selected.location, selected.length)
+        attributed = self.textStorage().attributedSubstringFromRange_(
+            selected
         )
+        copyable = prepare_copy(attributed)
         pasteboard = NSPasteboard.generalPasteboard()
-        pasteboard.declareTypes_owner_([NSStringPboardType], None)
-        pasteboard.setString_forType_(markdown, NSStringPboardType)
+        pasteboard.clearContents()
+        pasteboard.writeObjects_([copyable])
+
+
+class PlainTextInputTextView(NSTextView):
+    @objc.python_method
+    def _paste_plain_text(self) -> bool:
+        text = NSPasteboard.generalPasteboard().stringForType_(
+            NSStringPboardType
+        )
+        if text is None:
+            return False
+        self.insertText_replacementRange_(
+            str(text),
+            self.selectedRange(),
+        )
+        return True
+
+    def paste_(self, sender):
+        if not self._paste_plain_text():
+            objc.super(PlainTextInputTextView, self).pasteAndMatchStyle_(sender)
+
+    def pasteAndMatchStyle_(self, sender):
+        self.paste_(sender)
 
 
 class InputDelegate(NSObject):
@@ -406,14 +422,14 @@ class TabContentView(NSView):
     input_text_view = None
     input_delegate = None
     conversation_delegate = None
-    markdown_display_map: MarkdownDisplayMap | None = None
+    markdown_render_metadata: MarkdownRenderMetadata | None = None
     focused_block = -1
 
     @objc.python_method
     def configure(self, ui, tab_id: int, input_text: str) -> None:
         self.ui = ui
         self.tab_id = tab_id
-        self.markdown_display_map = None
+        self.markdown_render_metadata = None
         self.focused_block = -1
 
         status_box = NSBox.alloc().initWithFrame_(((0, 0), (1, 1)))
@@ -492,7 +508,9 @@ class TabContentView(NSView):
         input_box.addSubview_(input_scroll)
         self.input_scroll = input_scroll
 
-        input_view = NSTextView.alloc().initWithFrame_(((0, 0), (1, 1)))
+        input_view = PlainTextInputTextView.alloc().initWithFrame_(
+            ((0, 0), (1, 1))
+        )
         input_view.setString_(input_text)
         input_view.setFont_(NSFont.systemFontOfSize_(FONT_SIZE))
         input_view.setDrawsBackground_(False)
@@ -551,7 +569,7 @@ class TabContentView(NSView):
     def set_transcript(
         self,
         cocoa_text,
-        markdown_display_map: MarkdownDisplayMap,
+        markdown_render_metadata: MarkdownRenderMetadata,
     ) -> None:
         selected = self.transcript_view.selectedRange()
         self.transcript_view.textStorage().setAttributedString_(cocoa_text)
@@ -559,7 +577,7 @@ class TabContentView(NSView):
         location = min(selected.location, length)
         selection_length = min(selected.length, length - location)
         self.transcript_view.setSelectedRange_((location, selection_length))
-        self.markdown_display_map = markdown_display_map
+        self.markdown_render_metadata = markdown_render_metadata
 
     @objc.python_method
     def layout_content(
@@ -1178,7 +1196,7 @@ class MacAgenticUI:
             tool_call_descriptions=tab.tool_call_descriptions,
             show_tool_output=app.show_tool_output,
         )
-        cocoa_text, markdown_display_map = self.renderer.render(
+        cocoa_text, markdown_render_metadata = self.renderer.render(
             transcript,
             NSColor.darkGrayColor(),
             expanded_block_ids=tab.expanded_block_ids,
@@ -1258,7 +1276,7 @@ class MacAgenticUI:
             if candidate.content_view is not None:
                 candidate.content_view.setHidden_(candidate is not tab)
         content_view.set_status(tab.agent)
-        content_view.set_transcript(cocoa_text, markdown_display_map)
+        content_view.set_transcript(cocoa_text, markdown_render_metadata)
         content_view.layout_content(
             root_size=root_size,
             top_y=top_y,
@@ -1424,12 +1442,12 @@ class MacAgenticUI:
 
     def copy_block(self, block_id: str) -> None:
         content_view = self.active_content_view
-        display_map = (
-            content_view.markdown_display_map
+        metadata = (
+            content_view.markdown_render_metadata
             if content_view is not None
             else None
         )
-        content = display_map.block_content(block_id) if display_map else None
+        content = metadata.block_content(block_id) if metadata else None
         if content is None:
             return
         pasteboard = NSPasteboard.generalPasteboard()
@@ -1438,22 +1456,22 @@ class MacAgenticUI:
 
     def focus_next_block(self, backwards: bool = False) -> bool:
         content_view = self.active_content_view
-        display_map = (
-            content_view.markdown_display_map
+        metadata = (
+            content_view.markdown_render_metadata
             if content_view is not None
             else None
         )
         if (
             content_view is None
-            or display_map is None
-            or not display_map.block_ranges
+            or metadata is None
+            or not metadata.block_ranges
         ):
             return False
         step = -1 if backwards else 1
         content_view.focused_block = (
             content_view.focused_block + step
-        ) % len(display_map.block_ranges)
-        _, start, length = display_map.block_ranges[content_view.focused_block]
+        ) % len(metadata.block_ranges)
+        _, start, length = metadata.block_ranges[content_view.focused_block]
         storage = content_view.transcript_view.textStorage()
         storage.removeAttribute_range_(
             NSBackgroundColorAttributeName, (0, storage.length())
@@ -1471,17 +1489,17 @@ class MacAgenticUI:
 
     def copy_focused_block(self) -> None:
         content_view = self.active_content_view
-        display_map = (
-            content_view.markdown_display_map
+        metadata = (
+            content_view.markdown_render_metadata
             if content_view is not None
             else None
         )
         if (
             content_view is not None
-            and display_map is not None
-            and 0 <= content_view.focused_block < len(display_map.block_ranges)
+            and metadata is not None
+            and 0 <= content_view.focused_block < len(metadata.block_ranges)
         ):
-            block_id, _, _ = display_map.block_ranges[
+            block_id, _, _ = metadata.block_ranges[
                 content_view.focused_block
             ]
             self.copy_block(block_id)

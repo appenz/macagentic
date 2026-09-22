@@ -40,5 +40,6 @@ app = MacAgenticApp()
 
 `create_agent()` assigns monotonically increasing integer IDs. Restored IDs
 resume the sequence, and existing `~/.tmpagent/<id>` roots are reused unchanged.
-New agents start with `model_name` from configuration; each agent may later
-switch models via its own `model_presets` without changing other tabs.
+New agents start with the medium model preset, unless `--model` supplied an
+explicit process-level override. Each agent may later switch models via its
+own `model_presets` without changing other tabs.

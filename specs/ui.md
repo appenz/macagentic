@@ -125,14 +125,14 @@ class TabContentView(NSView):
     input_text_view: NSTextView
     input_delegate: InputDelegate
     conversation_delegate: ConversationDelegate
-    markdown_display_map: MarkdownDisplayMap | None
+    markdown_render_metadata: MarkdownRenderMetadata | None
     focused_block: int
 
     def set_status(self, agent: Agent) -> None: ...
     def set_transcript(
         self,
         cocoa_text: NSMutableAttributedString,
-        markdown_display_map: MarkdownDisplayMap,
+        markdown_render_metadata: MarkdownRenderMetadata,
     ) -> None: ...
     def input_text(self) -> str: ...
     def clear_input(self) -> None: ...
@@ -263,38 +263,8 @@ state, and first-responder identity do not migrate between tabs. `UITab.input_te
 is synchronized from that view for session persistence and initializes the
 view when a restored tab is first mounted.
 
-The shared `MarkdownRenderer` retains only its parser/configuration. A render
-returns the Cocoa attributed string plus a document-specific
-`MarkdownDisplayMap`. The map belongs to the tab content view and contains no
-Cocoa objects:
-
-```python
-@dataclass(frozen=True)
-class MarkdownDisplayMap:
-    markdown_source: str
-    source_spans: tuple[tuple[int, int, int, int], ...]
-    block_contents: Mapping[str, str]
-    block_ranges: tuple[tuple[str, int, int], ...]
-
-    def markdown_for_range(self, char_range: tuple[int, int]) -> str: ...
-    def block_content(self, block_id: str) -> str | None: ...
-
-
-class MarkdownRenderer:
-    def render(
-        self,
-        markdown: str,
-        color: NSColor,
-        *,
-        expanded_block_ids: set[str],
-        math_bitmap_cache: MathBitmapCache,
-        scale_factor: float,
-    ) -> tuple[NSMutableAttributedString, MarkdownDisplayMap]: ...
-```
-
-Copy, collapsible-block links, and keyboard block focus resolve against the
-active `TabContentView.markdown_display_map`; the shared renderer has no
-selection, block-focus, expansion, or last-document state.
+Markdown rendering, render metadata, transcript copying, block-copy actions,
+and input paste behavior are specified in `specs/markdown_rendering.md`.
 
 ## Async Display Work
 
@@ -321,7 +291,7 @@ when `app.workspace` matches, while runtime and display caches start fresh.
 - `macagentic/ui/cli.py`: `CommandLineUI` and batch CLI runner.
 - `macagentic/ui/core.py`: `MacAgenticUI`, Cocoa window, tabs, and rendering orchestration.
 - `macagentic/ui/markdown.py`: Native Cocoa Markdown renderer.
-- `macagentic/ui/math_render.py`: LaTeX math bitmap rendering (see `specs/math_rendering.md`).
+- `macagentic/ui/math_render.py`: LaTeX math bitmap rendering (see `specs/markdown_rendering.md`).
 - `macagentic/ui/projection.py`: Terminal conversation-log projection and usage formatting.
 - `macagentic/ui/updates.py`: Immutable UI update events.
 - `macagentic/ui/helpers/fast_llm.py`: Asynchronous fast-model helper for titles and descriptions.

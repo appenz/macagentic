@@ -8,9 +8,9 @@ from Cocoa import (
     NSFontAttributeName,
     NSForegroundColorAttributeName,
     NSLineBreakByTruncatingTail,
+    NSLinkAttributeName,
     NSParagraphStyleAttributeName,
 )
-from Foundation import NSString
 
 from macagentic.ui.math_render import (
     MathBitmapCache,
@@ -22,8 +22,9 @@ from macagentic.ui.markdown import (
     LINE_HEIGHT,
     LIST_ITEM_SPACING,
     PARAGRAPH_GAP,
-    MarkdownDisplayMap,
+    MarkdownRenderMetadata,
     MarkdownRenderer,
+    prepare_copy,
 )
 
 
@@ -37,20 +38,14 @@ def _style_at(rendered, marker):
     return style
 
 
-def _paragraph_styles(rendered):
-    text = NSString.stringWithString_(str(rendered.string()))
-    styles = []
-    position = 0
-    while position < rendered.length():
-        paragraph_range = text.paragraphRangeForRange_((position, 0))
-        style, _ = rendered.attribute_atIndex_effectiveRange_(
-            NSParagraphStyleAttributeName,
-            paragraph_range.location,
-            None,
-        )
-        styles.append(style)
-        position = paragraph_range.location + paragraph_range.length
-    return styles
+def _separator_style_before(rendered, marker):
+    index = str(rendered.string()).index(marker) - 1
+    style, _ = rendered.attribute_atIndex_effectiveRange_(
+        NSParagraphStyleAttributeName,
+        index,
+        None,
+    )
+    return style
 
 
 def _render(renderer, *args, **kwargs):
@@ -123,9 +118,8 @@ def test_markdown_lists_use_hanging_indents_and_spacing() -> None:
     assert style.firstLineHeadIndent() == 14.0
     assert style.headIndent() == 28.0
     assert style.paragraphSpacing() == 3.5
-    assert style.paragraphSpacingBefore() == 3.5
-    assert second_style.paragraphSpacing() == 3.5
-    assert "Second item\nAfter" in text
+    assert second_style.paragraphSpacing() == 0.0
+    assert "Second item\n\nAfter" in text
 
 
 def test_markdown_uses_block_transition_spacing() -> None:
@@ -153,22 +147,22 @@ def test_markdown_uses_block_transition_spacing() -> None:
         color,
     )
 
-    assert _style_at(
+    assert _separator_style_before(
         paragraph_heading,
         "Heading",
-    ).paragraphSpacingBefore() == PARAGRAPH_GAP
-    assert _style_at(
+    ).maximumLineHeight() == PARAGRAPH_GAP
+    assert _separator_style_before(
         heading_paragraph,
         "Body",
-    ).paragraphSpacingBefore() == BLOCK_GAP
-    assert _style_at(
+    ).maximumLineHeight() == BLOCK_GAP
+    assert _separator_style_before(
         list_heading,
         "Heading",
-    ).paragraphSpacingBefore() == PARAGRAPH_GAP
-    assert _style_at(
+    ).maximumLineHeight() == PARAGRAPH_GAP
+    assert _separator_style_before(
         paragraph_list,
-        "Item",
-    ).paragraphSpacingBefore() == BLOCK_GAP
+        "•",
+    ).maximumLineHeight() == BLOCK_GAP
 
 
 def test_markdown_list_outer_and_internal_spacing() -> None:
@@ -178,13 +172,16 @@ def test_markdown_list_outer_and_internal_spacing() -> None:
         "Intro\n\n- One\n- Two\n- Three\n\nAfter",
         NSColor.blackColor(),
     )
-    styles = [style for style in _paragraph_styles(rendered) if style is not None]
-
-    assert styles[1].paragraphSpacingBefore() == BLOCK_GAP
-    assert styles[1].paragraphSpacing() == LIST_ITEM_SPACING
-    assert styles[2].paragraphSpacing() == LIST_ITEM_SPACING
-    assert styles[3].paragraphSpacing() == BLOCK_GAP
-    assert styles[4].paragraphSpacingBefore() == BLOCK_GAP
+    assert _separator_style_before(
+        rendered,
+        "•",
+    ).maximumLineHeight() == BLOCK_GAP
+    assert _style_at(rendered, "One").paragraphSpacing() == LIST_ITEM_SPACING
+    assert _style_at(rendered, "Two").paragraphSpacing() == LIST_ITEM_SPACING
+    assert _separator_style_before(
+        rendered,
+        "After",
+    ).maximumLineHeight() == BLOCK_GAP
 
 
 def test_markdown_heading_typography() -> None:
@@ -235,7 +232,10 @@ def test_markdown_heavy_block_layout() -> None:
     assert style.headIndent() == 8.0
     assert style.lineBreakMode() == NSLineBreakByTruncatingTail
     assert not style.allowsDefaultTighteningForTruncation()
-    assert style.paragraphSpacingBefore() == PARAGRAPH_GAP
+    assert _separator_style_before(
+        rendered,
+        "A",
+    ).maximumLineHeight() == PARAGRAPH_GAP
 
 
 def test_markdown_links_and_table_alignment() -> None:
@@ -326,7 +326,7 @@ def test_markdown_inline_math_render_failure_falls_back_to_source() -> None:
         "render",
         side_effect=MathRenderError("bad math"),
     ):
-        rendered, display_map = renderer.render(
+        rendered, _metadata = renderer.render(
             source,
             NSColor.blackColor(),
             math_bitmap_cache=MathBitmapCache(),
@@ -334,7 +334,6 @@ def test_markdown_inline_math_render_failure_falls_back_to_source() -> None:
     text = str(rendered.string())
     assert text == source
     assert "\ufffc" not in text
-    assert display_map.markdown_for_range((0, len(text))) == source
 
 
 def test_markdown_display_math_render_failure_falls_back_to_source() -> None:
@@ -345,7 +344,7 @@ def test_markdown_display_math_render_failure_falls_back_to_source() -> None:
         "render",
         side_effect=MathRenderError("bad math"),
     ):
-        rendered, display_map = renderer.render(
+        rendered, _metadata = renderer.render(
             source,
             NSColor.blackColor(),
             math_bitmap_cache=MathBitmapCache(),
@@ -353,7 +352,6 @@ def test_markdown_display_math_render_failure_falls_back_to_source() -> None:
     text = str(rendered.string())
     assert "\ufffc" not in text
     assert "$$\nx^2\n$$" in text
-    assert display_map.markdown_for_range((0, len(text))) == source
 
 
 def test_markdown_invalid_latex_renders_as_text() -> None:
@@ -403,11 +401,11 @@ def test_markdown_currency_and_math_on_same_line() -> None:
     assert len(cache) == 1
 
 
-def test_markdown_for_selection_preserves_math_markdown() -> None:
+def test_copyable_render_replaces_math_with_markdown() -> None:
     renderer = MarkdownRenderer()
     cache = MathBitmapCache()
     source = "Before $x^2$ after"
-    rendered, display_map = renderer.render(
+    rendered, _metadata = renderer.render(
         source,
         NSColor.blackColor(),
         math_bitmap_cache=cache,
@@ -415,14 +413,52 @@ def test_markdown_for_selection_preserves_math_markdown() -> None:
     text = str(rendered.string())
     math_index = text.index("\ufffc")
 
-    copied = display_map.markdown_for_range((0, len(text)))
-    assert copied == source
+    copied = prepare_copy(rendered)
+    copied_math = prepare_copy(
+        rendered.attributedSubstringFromRange_((math_index, 1))
+    )
 
-    copied_math = display_map.markdown_for_range((math_index, 1))
-    assert copied_math == "$x^2$"
+    assert str(copied.string()) == source
+    assert str(copied_math.string()) == "$x^2$"
 
-    copied_mixed = display_map.markdown_for_range((0, math_index + 1))
-    assert copied_mixed == "Before $x^2$"
+
+def test_copyable_render_preserves_styling_links_and_tables() -> None:
+    renderer = MarkdownRenderer()
+    source = (
+        "**Bold** [docs](https://example.com)\n\n"
+        "| Name | Count |\n|---|---:|\n| A | 2 |"
+    )
+    rendered, _metadata = renderer.render(source, NSColor.blackColor())
+    copied = prepare_copy(rendered)
+    text = str(copied.string())
+
+    assert text == "Bold docs\n\nName  Count\n────  ─────\nA         2"
+    bold_font, _ = copied.attribute_atIndex_effectiveRange_(
+        NSFontAttributeName,
+        0,
+        None,
+    )
+    link, _ = copied.attribute_atIndex_effectiveRange_(
+        NSLinkAttributeName,
+        text.index("docs"),
+        None,
+    )
+    assert bold_font.fontDescriptor().symbolicTraits() != 0
+    assert str(link) == "https://example.com"
+
+
+def test_copyable_render_omits_interactive_chrome() -> None:
+    renderer = MarkdownRenderer()
+    rendered, _metadata = renderer.render(
+        "Visit https://example.com.\n\n```\ncode\n```",
+        NSColor.blackColor(),
+    )
+
+    copied = prepare_copy(rendered)
+
+    assert str(copied.string()) == (
+        "Visit https://example.com.\n\ncode"
+    )
 
 
 def test_display_math_inside_list_with_plus_line_renders() -> None:
@@ -439,7 +475,7 @@ def test_display_math_inside_list_with_plus_line_renders() -> None:
         r"\mu_0\varepsilon_0\frac{d}{dt}\int_S \mathbf{E}\cdot d\mathbf{A}"
         "\n$$\n"
     )
-    rendered, display_map = renderer.render(
+    rendered, _metadata = renderer.render(
         source,
         NSColor.blackColor(),
         math_bitmap_cache=cache,
@@ -450,56 +486,19 @@ def test_display_math_inside_list_with_plus_line_renders() -> None:
     assert "$$" not in text
     assert r"\oint" not in text
     assert len(cache) == 1
-    assert display_map.markdown_for_range((0, len(text))) == source.rstrip()
 
 
-def test_markdown_for_selection_preserves_source_not_reconstruction() -> None:
-    """Copy must return source Markdown, including unmapped ** and blank lines."""
-    renderer = MarkdownRenderer()
-    source = (
-        "**You:** Show me Maxwell\n\n"
-        "**Gauss’s law**\n\n"
-        "$$\n"
-        r"\oint \mathbf{E}\cdot d\mathbf{A} = \frac{Q}{\varepsilon_0}"
-        "\n$$\n\n"
-        "**Ampère–Maxwell**\n\n"
-        "$$\n"
-        r"\oint \mathbf{B}\cdot d\mathbf{\ell} = \mu_0 I"
-        "\n$$\n"
-    )
-    rendered, display_map = renderer.render(
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=MathBitmapCache(),
-    )
-    text = str(rendered.string())
-    copied = display_map.markdown_for_range((0, len(text)))
-
-    assert copied == source.rstrip()
-    assert "**You:**" in copied
-    assert "**Ampère–Maxwell**\n\n$$" in copied
-    assert "formMaxwell" not in copied.replace("\n", "")
-    assert "Ampère–Maxwell$$" not in copied.replace("\n", "")
-
-
-def test_display_map_contains_only_python_metadata() -> None:
+def test_render_metadata_contains_only_python_metadata() -> None:
     renderer = MarkdownRenderer()
     source = "Before\n\n```\ncode\n```"
-    _rendered, display_map = renderer.render(source, NSColor.blackColor())
+    _rendered, metadata = renderer.render(source, NSColor.blackColor())
 
-    assert isinstance(display_map, MarkdownDisplayMap)
-    assert display_map.markdown_source == source
-    assert isinstance(display_map.source_spans, tuple)
-    assert isinstance(display_map.block_contents, dict)
-    assert isinstance(display_map.block_ranges, tuple)
+    assert isinstance(metadata, MarkdownRenderMetadata)
+    assert isinstance(metadata.block_contents, dict)
+    assert isinstance(metadata.block_ranges, tuple)
     assert all(
         isinstance(value, (str, int))
-        for span in display_map.source_spans
-        for value in span
-    )
-    assert all(
-        isinstance(value, (str, int))
-        for block_range in display_map.block_ranges
+        for block_range in metadata.block_ranges
         for value in block_range
     )
 
@@ -520,9 +519,7 @@ def test_renderer_reuse_does_not_leak_display_state() -> None:
     )
 
     assert vars(renderer).keys() == {"_parser"}
-    assert first_map.markdown_source == first_source
     assert first_map.block_content(first_block_id) == "first block"
-    assert second_map.markdown_source == second_source
     assert second_map.block_ranges == ()
     assert second_map.block_content(first_block_id) is None
 
