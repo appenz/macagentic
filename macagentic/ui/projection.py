@@ -11,6 +11,7 @@ def render_conversation(
     events: Iterable[ConversationEvent],
     *,
     tool_call_descriptions: Mapping[str, str] | None = None,
+    show_tool_status: bool = True,
     show_tool_output: bool = False,
 ) -> str:
     descriptions = tool_call_descriptions or {}
@@ -23,10 +24,11 @@ def render_conversation(
             message = event.payload
             if content := assistant_text(message):
                 parts.append(f"{content}\n\n")
-            for action in message.get("extra", {}).get("actions", []):
-                call_id = str(action.get("tool_call_id", ""))
-                description = descriptions.get(call_id, "Running command")
-                parts.append(f"```status\n{description}\n```\n\n")
+            if show_tool_status:
+                for action in message.get("extra", {}).get("actions", []):
+                    call_id = str(action.get("tool_call_id", ""))
+                    description = descriptions.get(call_id, "Running command")
+                    parts.append(f"```status\n{description}\n```\n\n")
         elif event.kind == "tool_execution" and show_tool_output:
             action = event.payload.get("action", {})
             output = event.payload.get("output", {})

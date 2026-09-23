@@ -62,6 +62,7 @@ class CommandLineUI:
             self.log_render_index = len(events)
             content = render_conversation(
                 new_events,
+                show_tool_status=False,
                 show_tool_output=self.show_tool_output,
             )
             if content:
@@ -73,6 +74,7 @@ def run_batch(request: str) -> None:
     agent.run_turn(request)
     content = render_conversation(
         agent.conversation_log.snapshot(),
+        show_tool_status=False,
         show_tool_output=app.show_tool_output,
     )
     if content:

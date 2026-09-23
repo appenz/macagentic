@@ -42,11 +42,20 @@ def test_projection_renders_display_state_and_optional_tool_output() -> None:
     assert "Listing workspace files" in rendered
     assert "README.md" not in rendered
 
+    rendered_for_cli = render_conversation(
+        events,
+        show_tool_status=False,
+    )
+    assert "Running command" not in rendered_for_cli
+    assert "```status" not in rendered_for_cli
+
     rendered_with_tools = render_conversation(
         events,
         tool_call_descriptions={"call-1": "Listing workspace files"},
+        show_tool_status=False,
         show_tool_output=True,
     )
+    assert "```status" not in rendered_with_tools
     assert "README.md" in rendered_with_tools
     assert '"tool_call_id": "call-1"' in render_history(events)
 
