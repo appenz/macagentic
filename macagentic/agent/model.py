@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 import litellm
 from minisweagent.models.litellm_response_model import LitellmResponseModel
 
+CONTEXT_FILE_TYPE = "macagentic_context_file"
+MAX_CONTEXT_FILE_BYTES = 20 * 1024 * 1024
 MERCURY_2_5 = "inception/mercury-2.5"
 MERCURY_2_5_METADATA = {
     "cache_read_input_token_cost": 0.004 / 1_000_000,
@@ -27,7 +33,8 @@ MERCURY_2_5_METADATA = {
 class ResponseModel(LitellmResponseModel):
     """Responses API adapter that also accepts ordinary assistant replies."""
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, *, context_root: Path | None = None, **kwargs) -> None:
+        self.context_root = context_root
         model_name = str(kwargs.get("model_name", ""))
         if model_name == MERCURY_2_5:
             _register_mercury_metadata()
@@ -45,6 +52,47 @@ class ResponseModel(LitellmResponseModel):
             return []
         return super()._parse_actions(response)
 
+    def format_observation_messages(self, message, outputs, template_vars=None):
+        observations = super().format_observation_messages(
+            message, outputs, template_vars
+        )
+        for observation, output in zip(observations, outputs):
+            path = _context_path(output)
+            if path:
+                observation["output"] = [
+                    {"type": CONTEXT_FILE_TYPE, "path": path}
+                ]
+        return observations
+
+    def _prepare_messages_for_api(self, messages: list[dict]) -> list[dict]:
+        prepared = super()._prepare_messages_for_api(messages)
+        for message in prepared:
+            output = message.get("output")
+            if isinstance(output, list):
+                message["output"] = [
+                    self._materialize(item)
+                    if item.get("type") == CONTEXT_FILE_TYPE else item
+                    for item in output
+                ]
+        return prepared
+
+    def _materialize(self, item: dict) -> dict:
+        if self.context_root is None:
+            raise ValueError("Context root is unavailable.")
+        context = (self.context_root / "context").resolve()
+        path = (self.context_root / item["path"]).resolve()
+        if not path.is_file() or not path.is_relative_to(context):
+            raise ValueError(f"Invalid context file: {item['path']}")
+        if path.stat().st_size > MAX_CONTEXT_FILE_BYTES:
+            raise ValueError(f"Context file exceeds 20 MiB: {item['path']}")
+        mime = mimetypes.guess_type(path.name)[0] or ""
+        data = f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
+        if mime.startswith("image/"):
+            return {"type": "input_image", "image_url": data, "detail": "auto"}
+        if mime == "application/pdf":
+            return {"type": "input_file", "file_data": data, "filename": path.name}
+        raise ValueError(f"Unsupported context file: {item['path']}")
+
 
 def _register_mercury_metadata() -> None:
     try:
@@ -53,6 +101,17 @@ def _register_mercury_metadata() -> None:
         # LiteLLM 1.91 predates Mercury 2.5. Use Inception's current launch
         # pricing until the installed LiteLLM registry includes the model.
         litellm.register_model({MERCURY_2_5: MERCURY_2_5_METADATA})
+
+
+def _context_path(output: dict) -> str | None:
+    if output.get("returncode") != 0:
+        return None
+    try:
+        payload = json.loads(output.get("output", ""))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    path = payload.get("macagentic_context_file")
+    return path if isinstance(path, str) else None
 
 
 def _value(value: object, key: str) -> Any:

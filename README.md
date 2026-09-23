@@ -20,6 +20,7 @@ uv run python -m macagentic --ui
 macAgentic includes a small set of command-line tools for common agent tasks:
 
 - `gwsx` — access Google Workspace with explicit accounts
+- `macagentic-read-file` — attach an image or PDF to model context
 - `noteheader` — create meeting-note headers
 - `things` — manage Things to-dos
 - `websearch` — search the web with Brave Search

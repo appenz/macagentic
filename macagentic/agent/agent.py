@@ -16,7 +16,7 @@ from macagentic.agent.filesystem import (
     create_agent_root,
     render_filesystem_instructions,
 )
-from macagentic.agent.model import ResponseModel
+from macagentic.agent.model import CONTEXT_FILE_TYPE, ResponseModel
 from macagentic.agent.shell import ShellEnvironment
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.usage import UsageTracker
@@ -176,6 +176,7 @@ class Agent:
             "MSWEA_MODEL_NAME", DEFAULT_MODELS["medium"]
         )
         self.model = ResponseModel(
+            context_root=self.root,
             **(config["model"] | {"model_name": selected_model})
         )
         environment_config = config["environment"] | {
@@ -267,7 +268,12 @@ class Agent:
             if self.interrupted.is_set():
                 return
 
-            response = self._query_model()
+            try:
+                response = self._query_model()
+            except Exception as error:
+                if self._replace_rejected_context_files(error):
+                    continue
+                raise
             if response is None or self.interrupted.is_set():
                 return
 
@@ -333,6 +339,28 @@ class Agent:
         self.messages.append(message)
         self.conversation_log.append_message(message)
         self.update_ui()
+
+    def _replace_rejected_context_files(self, error: Exception) -> bool:
+        indices = []
+        for index in range(len(self.messages) - 1, -1, -1):
+            message = self.messages[index]
+            if message.get("object") == "response":
+                break
+            output = message.get("output")
+            if isinstance(output, list) and any(
+                item.get("type") == CONTEXT_FILE_TYPE for item in output
+            ):
+                indices.append(index)
+        text = f"Model provider rejected the file: {str(error)[:4000]}"
+        for index in reversed(indices):
+            old = self.messages[index]
+            replacement = old | {"output": text}
+            self.messages[index] = replacement
+            self.conversation_log.append("discarded_message", old)
+            self.conversation_log.append_message(replacement)
+        if indices:
+            self.update_ui()
+        return bool(indices)
 
     def _discard_incomplete_tool_call(self) -> None:
         if not self.messages:

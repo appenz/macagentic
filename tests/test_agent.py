@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 from macagentic.agent import Agent, ConversationLog, ResponseModel
 from macagentic.agent.agent import load_system_prompt
-from macagentic.agent.model import MERCURY_2_5, MERCURY_2_5_METADATA
+from macagentic.agent.model import (
+    CONTEXT_FILE_TYPE,
+    MERCURY_2_5,
+    MERCURY_2_5_METADATA,
+)
 from macagentic.agent.skills import Skill, SkillCatalog
 
 
@@ -93,6 +97,40 @@ class ToolModel(FakeModel):
                 "output": "hello",
             }
         ]
+
+
+class RejectingFileModel(ToolModel):
+    def query(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "object": "response",
+                "output": [{
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "bash",
+                    "arguments": '{"command":"macagentic-read-file chart.png"}',
+                }],
+                "extra": {"actions": [{
+                    "command": "macagentic-read-file chart.png",
+                    "tool_call_id": "call-1",
+                }]},
+            }
+        if self.calls == 2:
+            assert messages[-1]["output"][0]["type"] == CONTEXT_FILE_TYPE
+            raise ValueError("unsupported image")
+        assert "unsupported image" in messages[-1]["output"]
+        return text_response("I will use another approach.")
+
+    def format_observation_messages(self, _response, _outputs):
+        return [{
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": [{
+                "type": CONTEXT_FILE_TYPE,
+                "path": "context/001-chart.png",
+            }],
+        }]
 
 
 class FakeToolRunner:
@@ -247,6 +285,34 @@ def test_response_model_accepts_plain_text_and_reasoning_items() -> None:
         {"role": "system", "content": "Instructions"},
         {"type": "reasoning", "id": "reasoning-1"},
     ]
+
+
+def test_response_model_materializes_context_files(tmp_path: Path) -> None:
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "001-chart.png").write_bytes(b"image")
+    (context / "002-report.pdf").write_bytes(b"%PDF")
+    model = ResponseModel(model_name="openai/fake", context_root=tmp_path)
+    response = {"extra": {"actions": [
+        {"command": "read", "tool_call_id": "image"},
+        {"command": "read", "tool_call_id": "pdf"},
+    ]}}
+    outputs = [
+        {"output": '{"macagentic_context_file":"context/001-chart.png"}',
+         "returncode": 0, "exception_info": ""},
+        {"output": '{"macagentic_context_file":"context/002-report.pdf"}',
+         "returncode": 0, "exception_info": ""},
+    ]
+
+    observations = model.format_observation_messages(response, outputs)
+    prepared = model._prepare_messages_for_api(observations)
+
+    image = prepared[0]["output"][0]
+    pdf = prepared[1]["output"][0]
+    assert image["type"] == "input_image"
+    assert image["image_url"].startswith("data:image/png;base64,")
+    assert pdf["type"] == "input_file"
+    assert pdf["file_data"].startswith("data:application/pdf;base64,")
 
 
 def test_response_model_registers_missing_mercury_metadata(monkeypatch) -> None:
@@ -420,6 +486,24 @@ def test_agent_runs_tools_and_records_raw_execution(tmp_path: Path) -> None:
     ]
     assert tool_events[0].payload["output"]["returncode"] == 0
     assert message_payloads(agent) == agent.messages
+
+
+def test_agent_returns_provider_file_rejection_to_model(tmp_path: Path) -> None:
+    agent = make_agent(tmp_path, ui=None)
+    model = RejectingFileModel()
+    agent.model = model
+    agent.tool_runner = FakeToolRunner()
+
+    agent.run_turn("Read chart.png")
+
+    assert model.calls == 3
+    assert agent.messages[-1]["output"][0]["content"][0]["text"] == (
+        "I will use another approach."
+    )
+    assert any(
+        event.kind == "discarded_message"
+        for event in agent.conversation_log.snapshot()
+    )
 
 
 def test_agent_tracks_usage_from_every_model_call(tmp_path: Path) -> None:
