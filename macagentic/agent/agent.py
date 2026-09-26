@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -52,6 +53,56 @@ def extract_model_tier(text: str) -> tuple[str | None, str]:
 
 class UI(Protocol):
     def update(self) -> None: ...
+
+
+LOST_TOOL_OUTPUT = json.dumps(
+    {
+        "returncode": -1,
+        "output": "",
+        "exception_info": "The tool output was lost before it was recorded.",
+    }
+)
+
+
+def repair_tool_outputs(messages: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Give every function call an output so the history is accepted again.
+
+    Returns the repaired message list and the synthetic outputs that were
+    inserted. A saved conversation can carry a tool call without its output
+    if the process died or a tool step raised between the two.
+    """
+    repaired: list[dict] = []
+    inserted: list[dict] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        for call_id in pending:
+            observation = {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": LOST_TOOL_OUTPUT,
+                "extra": {"returncode": -1, "raw_output": ""},
+            }
+            repaired.append(observation)
+            inserted.append(observation)
+        pending.clear()
+
+    for message in messages:
+        if message.get("type") == "function_call_output":
+            if message.get("call_id") in pending:
+                pending.remove(message["call_id"])
+        else:
+            flush()
+        repaired.append(message)
+        if message.get("object") == "response":
+            pending.extend(
+                str(item.get("call_id") or item.get("id"))
+                for item in message.get("output", [])
+                if isinstance(item, dict)
+                and item.get("type") == "function_call"
+            )
+    flush()
+    return repaired, inserted
 
 
 def _apply_prompt_conditionals(
@@ -188,7 +239,9 @@ class Agent:
             **environment_config
         )
         if messages is not None:
-            self.messages = deepcopy(messages)
+            self.messages, inserted = repair_tool_outputs(deepcopy(messages))
+            for message in inserted:
+                self.conversation_log.append_message(message)
         else:
             self.messages = []
             self._append_message(
@@ -251,8 +304,11 @@ class Agent:
         try:
             self._run_agent_turn()
         finally:
+            # Whether the turn was interrupted or a tool step raised, never
+            # leave a tool call without its output: the Responses API rejects
+            # every later request in the conversation otherwise.
+            self._discard_incomplete_tool_call()
             if self.interrupted.is_set():
-                self._discard_incomplete_tool_call()
                 self.conversation_log.append(
                     "interrupted",
                     {"request": request},

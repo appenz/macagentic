@@ -110,6 +110,9 @@ def _context_path(output: dict) -> str | None:
         payload = json.loads(output.get("output", ""))
     except (TypeError, json.JSONDecodeError):
         return None
+    if not isinstance(payload, dict):
+        # Ordinary output such as `42`, `true`, or `[...]` is valid JSON too.
+        return None
     path = payload.get("macagentic_context_file")
     return path if isinstance(path, str) else None
 

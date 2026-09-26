@@ -104,6 +104,12 @@ Every model message is copied into `conversation_log` in order. Additional
 agent events, such as original unexpanded input, are interleaved where they
 occur.
 
+Every tool call in `messages` is followed by its tool output. A turn that ends
+with an unanswered tool call (interruption or a failing tool step) discards
+that response and logs it as `discarded_message`; restored conversations that
+already contain an unanswered call receive a synthetic "lost output" message.
+The Responses API rejects every later request otherwise.
+
 ## Interruption
 
 `run_turn()` clears `interrupted`, checks it around model and tool work, and

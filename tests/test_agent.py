@@ -2,6 +2,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from macagentic.agent import Agent, ConversationLog, ResponseModel
 from macagentic.agent.agent import load_system_prompt
 from macagentic.agent.model import (
@@ -285,6 +287,27 @@ def test_response_model_accepts_plain_text_and_reasoning_items() -> None:
         {"role": "system", "content": "Instructions"},
         {"type": "reasoning", "id": "reasoning-1"},
     ]
+
+
+def test_observation_with_non_object_json_output_is_kept_as_text() -> None:
+    model = ResponseModel(model_name="openai/fake", context_root=None)
+    response = {
+        "extra": {
+            "actions": [
+                {"command": "wc -l < file", "tool_call_id": "call-1"},
+                {"command": "test -f x", "tool_call_id": "call-2"},
+            ]
+        }
+    }
+    outputs = [
+        {"output": "42\n", "returncode": 0, "exception_info": ""},
+        {"output": "true\n", "returncode": 0, "exception_info": ""},
+    ]
+
+    observations = model.format_observation_messages(response, outputs)
+
+    assert [o["call_id"] for o in observations] == ["call-1", "call-2"]
+    assert all(isinstance(o["output"], str) for o in observations)
 
 
 def test_response_model_materializes_context_files(tmp_path: Path) -> None:
@@ -580,6 +603,78 @@ def test_interrupt_releases_model_wait_and_discards_late_result(
         for message in agent.messages
     )
     assert agent.conversation_log.snapshot()[-1].kind == "interrupted"
+
+
+def test_tool_step_failure_leaves_no_dangling_tool_call(
+    tmp_path: Path,
+) -> None:
+    class FailingToolRunner(FakeToolRunner):
+        def execute(self, _action):
+            raise RuntimeError("tool step exploded")
+
+    agent = make_agent(tmp_path, ui=None)
+    agent.model = ToolModel()
+    agent.tool_runner = FailingToolRunner()
+
+    with pytest.raises(RuntimeError, match="tool step exploded"):
+        agent.run_turn("Run it")
+
+    assert not agent.messages[-1].get("extra", {}).get("actions")
+    kinds = [event.kind for event in agent.conversation_log.snapshot()]
+    assert "discarded_message" in kinds
+    assert "interrupted" not in kinds
+
+    agent.tool_runner = FakeToolRunner()
+    agent.run_turn("Try again")
+    assert agent.messages[-1]["output"][0]["content"][0]["text"] == "Done."
+
+
+def test_restored_messages_get_outputs_for_orphaned_tool_calls(
+    tmp_path: Path,
+) -> None:
+    messages = [
+        {"role": "system", "content": "Instructions"},
+        {"role": "user", "content": "Count lines"},
+        {
+            "object": "response",
+            "output": [
+                {"type": "reasoning", "id": "rs-1"},
+                {
+                    "type": "function_call",
+                    "call_id": "call-lost",
+                    "name": "bash",
+                    "arguments": '{"command":"wc -l < f"}',
+                },
+            ],
+            "extra": {"actions": [{"command": "wc -l < f", "tool_call_id": "call-lost"}]},
+        },
+        {"role": "user", "content": "Are you still there?"},
+        {
+            "object": "response",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call-ok",
+                "name": "bash",
+                "arguments": '{"command":"true"}',
+            }],
+            "extra": {"actions": []},
+        },
+        {"type": "function_call_output", "call_id": "call-ok", "output": "{}"},
+    ]
+
+    agent = make_agent(tmp_path, messages=messages, conversation_log=ConversationLog())
+
+    types = [m.get("type") or m.get("role") or m.get("object") for m in agent.messages]
+    assert types == [
+        "system", "user", "response", "function_call_output",
+        "user", "response", "function_call_output",
+    ]
+    inserted = agent.messages[3]
+    assert inserted["call_id"] == "call-lost"
+    assert "lost" in inserted["output"]
+    assert agent.conversation_log.records() == [
+        {"kind": "message", "payload": inserted}
+    ]
 
 
 def test_interrupt_prunes_incomplete_tool_call_and_records_discard(
