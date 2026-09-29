@@ -11,13 +11,18 @@ from typing import Protocol
 
 import yaml
 from minisweagent import package_dir
+from minisweagent.exceptions import FormatError
 
 from macagentic.agent.conversation_log import ConversationLog
 from macagentic.agent.filesystem import (
     create_agent_root,
     render_filesystem_instructions,
 )
-from macagentic.agent.model import CONTEXT_FILE_TYPE, ResponseModel
+from macagentic.agent.model import (
+    CONTEXT_FILE_TYPE,
+    FORMAT_ERROR_TEMPLATE,
+    ResponseModel,
+)
 from macagentic.agent.shell import ShellEnvironment
 from macagentic.agent.skills import EMPTY_SKILL_CATALOG, SkillCatalog
 from macagentic.agent.usage import UsageTracker
@@ -228,7 +233,13 @@ class Agent:
         )
         self.model = ResponseModel(
             context_root=self.root,
-            **(config["model"] | {"model_name": selected_model})
+            **(
+                config["model"]
+                | {
+                    "model_name": selected_model,
+                    "format_error_template": FORMAT_ERROR_TEMPLATE,
+                }
+            ),
         )
         environment_config = config["environment"] | {
             "cwd": str(self.root),
@@ -326,6 +337,12 @@ class Agent:
 
             try:
                 response = self._query_model()
+            except FormatError as error:
+                # Bad tool call (e.g. a shell command called as a native tool).
+                # Feed the error back to the model and let it retry.
+                for message in error.messages:
+                    self._append_message(message)
+                continue
             except Exception as error:
                 if self._replace_rejected_context_files(error):
                     continue

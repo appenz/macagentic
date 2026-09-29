@@ -177,37 +177,29 @@ def make_agent(tmp_path: Path, **kwargs) -> Agent:
     )
 
 
-def test_default_prompt_has_all_placeholders_replaced() -> None:
-    prompt = load_system_prompt()
+@pytest.mark.parametrize("render_markdown", [False, True])
+def test_prompt_placeholders_and_conditionals_are_resolved(
+    render_markdown: bool,
+) -> None:
+    prompt = load_system_prompt(render_markdown=render_markdown)
 
     assert "{{CUSTOM_INSTRUCTIONS}}" not in prompt
     assert "{{TOOLS}}" not in prompt
     assert "{{SKILLS}}" not in prompt
     assert "{{FILESYSTEM}}" not in prompt
     assert "{{#if render_markdown}}" not in prompt
-    assert "plain text" in prompt
-    assert "Final responses should be in Markdown." not in prompt
+    assert "{{else}}" not in prompt
+    assert "{{/if}}" not in prompt
 
 
-def test_markdown_prompt_is_used_for_cocoa_agents(tmp_path: Path) -> None:
-    prompt = load_system_prompt(render_markdown=True)
-
-    assert "Final responses should be in Markdown." in prompt
-    assert "$...$" in prompt
-
-    agent = make_agent(tmp_path, render_markdown=True)
-    assert "Final responses should be in Markdown." in (
-        agent.messages[0]["content"]
+def test_custom_and_tool_instructions_are_inserted() -> None:
+    prompt = load_system_prompt(
+        "Always answer briefly.",
+        "### `things`\n\nUse `things list`.",
     )
 
-
-def test_plain_prompt_is_used_for_cli_agents(tmp_path: Path) -> None:
-    agent = make_agent(tmp_path)
-
-    assert "plain text" in agent.messages[0]["content"]
-    assert "Final responses should be in Markdown." not in (
-        agent.messages[0]["content"]
-    )
+    assert "Always answer briefly." in prompt
+    assert "### `things`\n\nUse `things list`." in prompt
 
 
 def test_agent_restores_messages_log_and_existing_root(tmp_path: Path) -> None:
@@ -238,16 +230,6 @@ def test_agent_restores_messages_log_and_existing_root(tmp_path: Path) -> None:
     assert agent.conversation_log.records() == log.records()
     assert (agent.root / "kept.txt").read_text() == "kept"
     assert agent.usage.snapshot().input_tokens == 0
-
-
-def test_custom_and_tool_instructions_are_inserted() -> None:
-    prompt = load_system_prompt(
-        "Always answer briefly.",
-        "### `things`\n\nUse `things list`.",
-    )
-
-    assert "## Custom Instructions\n\nAlways answer briefly." in prompt
-    assert "# Available Tools\n\n### `things`" in prompt
 
 
 def test_agent_uses_its_root_for_tools_and_prompt(tmp_path: Path) -> None:

@@ -10,6 +10,12 @@ import litellm
 from minisweagent.models.litellm_response_model import LitellmResponseModel
 
 CONTEXT_FILE_TYPE = "macagentic_context_file"
+# Replaces mini-swe-agent's template, which demands a bash call per response.
+FORMAT_ERROR_TEMPLATE = (
+    "Tool call error: {{ error }} "
+    "`bash` is the only tool; run the Available Tools as shell commands "
+    'through it, e.g. {"command": "websearch \\"query\\""}.'
+)
 MAX_CONTEXT_FILE_BYTES = 20 * 1024 * 1024
 MERCURY_2_5 = "inception/mercury-2.5"
 MERCURY_2_5_METADATA = {

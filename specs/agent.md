@@ -104,6 +104,10 @@ Every model message is copied into `conversation_log` in order. Additional
 agent events, such as original unexpanded input, are interleaved where they
 occur.
 
+A response whose tool calls cannot be parsed (for example a shell command
+called as a native tool) is not kept; the model receives a user message with
+the error and is queried again within the same tool-call round limit.
+
 Every tool call in `messages` is followed by its tool output. A turn that ends
 with an unanswered tool call (interruption or a failing tool step) discards
 that response and logs it as `discarded_message`; restored conversations that

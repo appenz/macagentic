@@ -20,7 +20,9 @@ You have direct access to the local filesystem through bash.
 
 {{CUSTOM_INSTRUCTIONS}}
 
-# Available Tools
+# Available Shell Commands
+
+Run them via `bash`. These are NOT tools you can run directly.
 
 {{TOOLS}}
 

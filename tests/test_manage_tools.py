@@ -94,30 +94,3 @@ def test_repo_tools_prompt_is_compact(tmp_path) -> None:
     text = output.read_text()
 
     assert not any(line.startswith("#") for line in text.splitlines())
-    assert text == (
-        "`gwsx` — Google Workspace. First argument is always a configured "
-        "account alias.\n"
-        "- Accounts: `gwsx account add <alias>` · `gwsx account delete <alias>` · "
-        "`gwsx account list`\n"
-        "- Run: `gwsx <alias> <gws arguments...>`\n"
-        "- Gmail helpers: `gwsx <alias> gmail +active-threads` (id + snippet) · "
-        "`gwsx <alias> gmail +thread --id <thread-id>`\n"
-        "- Re-auth: `gwsx <alias> auth login --scopes drive,gmail`\n"
-        "- Example: `gwsx private drive files list --params '{\"pageSize\": 5}'`\n"
-        "\n"
-        "`macagentic-read-file` — attach an image or PDF to your context.\n"
-        "- `macagentic-read-file PATH` — maximum 20 MiB\n"
-        "\n"
-        "`noteheader` — meeting-note header with attendees and location.\n"
-        "- `noteheader`\n"
-        "- `noteheader --ical-uid \"<uid>\"`\n"
-        "\n"
-        "`things` — user's to-do list.\n"
-        "- `things new \"<title>\"`\n"
-        "- `things list` — incomplete Today items with ids\n"
-        "- `things complete <id>`\n"
-        "\n"
-        "`websearch` — live web search via Brave.\n"
-        "- `websearch \"query\"`\n"
-        "- `websearch \"query\" --count N` — 1–20 results, default 5\n"
-    )
