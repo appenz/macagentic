@@ -2,6 +2,7 @@ import argparse
 import os
 from pathlib import Path
 
+import litellm
 from dotenv import load_dotenv
 
 from macagentic.agent.skills import load_available_skills
@@ -80,6 +81,10 @@ def _tool_instructions(args: argparse.Namespace) -> str | None:
 
 
 def main() -> None:
+    # Drop LiteLLM's uninformative "Give Feedback / Get Help" banner printed on
+    # every mapped exception. Failures are reported where they are handled;
+    # set LITELLM_LOG=DEBUG for LiteLLM's own diagnostics.
+    litellm.suppress_debug_info = True
     load_dotenv()
     args = parse_args()
     config = load_config()

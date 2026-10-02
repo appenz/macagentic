@@ -1,3 +1,4 @@
+import sys
 import threading
 from collections.abc import Callable
 
@@ -6,6 +7,15 @@ import litellm
 from macagentic.ui.helpers.assistant_text import assistant_text
 
 FAST_MODEL = "openai/gpt-5.4-nano"
+MAX_ERROR_CHARS = 200
+
+
+def one_line_error(error: BaseException) -> str:
+    """Collapse an exception to one bounded line; LiteLLM embeds JSON bodies."""
+    text = " ".join(f"{type(error).__name__}: {error}".split())
+    if len(text) > MAX_ERROR_CHARS:
+        text = text[: MAX_ERROR_CHARS - 3] + "..."
+    return text
 
 
 def request_fast_text(
@@ -31,8 +41,11 @@ def request_fast_text(
                 response = response.model_dump()
             if text := assistant_text(response):
                 on_result(text)
-        except Exception:
-            return
+        except Exception as error:
+            print(
+                f"Fast model {FAST_MODEL} failed: {one_line_error(error)}",
+                file=sys.stderr,
+            )
 
     threading.Thread(
         target=run,
