@@ -20,7 +20,8 @@ fields such as usage, cost, and model.
 output projection, usage display, `/exit`, and signal handling. Model-tier
 slash commands (`/fast`, `/medium`, `/slow`) are handled inside `Agent.run_turn`
 and surface as `model_switch` conversation-log events. It creates the agent with
-`ui=self`; `update()` reads and prints new conversation-log entries.
+`ui=self`; `update()` reads and prints new conversation-log entries using the
+projection specified in `specs/markdown_cli.md`.
 
 ```python
 class CommandLineUI:
@@ -80,7 +81,6 @@ class UITab:
     # Display state
     tool_call_descriptions: dict[str, str]  # Keyed by tool call ID.
     display_event_index: int  # Next conversation-log entry to render.
-    math_bitmap_cache: MathBitmapCache
     expanded_block_ids: set[str]
 
     # Persistent Cocoa views, created lazily on first mount
@@ -264,7 +264,7 @@ is synchronized from that view for session persistence and initializes the
 view when a restored tab is first mounted.
 
 Markdown rendering, render metadata, transcript copying, block-copy actions,
-and input paste behavior are specified in `specs/markdown_rendering.md`.
+and input paste behavior are specified in `specs/markdown_cocoa.md`.
 
 ## Async Display Work
 
@@ -291,8 +291,10 @@ when `app.workspace` matches, while runtime and display caches start fresh.
 - `macagentic/ui/cli.py`: `CommandLineUI` and batch CLI runner.
 - `macagentic/ui/core.py`: `MacAgenticUI`, Cocoa window, tabs, and rendering orchestration.
 - `macagentic/ui/markdown.py`: Native Cocoa Markdown renderer.
-- `macagentic/ui/math_render.py`: LaTeX math bitmap rendering (see `specs/markdown_rendering.md`).
-- `macagentic/ui/projection.py`: Terminal conversation-log projection and usage formatting.
+- `macagentic/ui/math_render.py`: LaTeX to PNG (see `specs/markdown_cocoa.md`).
+- `macagentic/ui/image_render.py`: Image sizing and attachments (see `specs/markdown_images.md`, `specs/markdown_cocoa.md`).
+- `macagentic/ui/conversation_markdown.py`: Conversation log to Markdown for both UIs, plus usage formatting (see `specs/markdown_cli.md`).
+- `macagentic/ui/terminal_images.py`: Inline terminal images (see `specs/markdown_cli.md`).
 - `macagentic/ui/updates.py`: Immutable UI update events.
 - `macagentic/ui/helpers/fast_llm.py`: Asynchronous fast-model helper for titles and descriptions.
 - `macagentic/ui/helpers/assistant_text.py`: Extract assistant text from model responses.

@@ -7,7 +7,7 @@ from macagentic.app import MacAgenticApp
 from macagentic.ui.cli import CommandLineUI
 from macagentic.ui.core import TOOL_UPDATE_MAX_LENGTH, _clean_description
 from macagentic.ui.helpers.fast_llm import request_fast_text
-from macagentic.ui.projection import render_conversation, render_history
+from macagentic.ui.conversation_markdown import render_conversation, render_history
 
 
 def test_projection_renders_display_state_and_optional_tool_output() -> None:
@@ -146,11 +146,13 @@ def test_fast_llm_request_is_non_blocking(monkeypatch) -> None:
 def test_command_line_ui_projects_only_new_events(
     monkeypatch,
     capsys,
+    tmp_path,
 ) -> None:
     class FakeAgent:
         def __init__(self) -> None:
             self.ui = None
             self.conversation_log = ConversationLog()
+            self.root = tmp_path
 
     agent = FakeAgent()
     monkeypatch.setattr(

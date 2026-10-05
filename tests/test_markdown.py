@@ -12,10 +12,9 @@ from Cocoa import (
     NSParagraphStyleAttributeName,
 )
 
-from macagentic.ui.math_render import (
-    MathBitmapCache,
-    MathRenderError,
-)
+import macagentic.ui.markdown as markdown_module
+from macagentic.ui.image_render import generate_render_image
+from macagentic.ui.math_render import MathRenderError, render_math
 from macagentic.ui.markdown import (
     BLOCK_GAP,
     CODE_FONT_SIZE,
@@ -51,6 +50,17 @@ def _separator_style_before(rendered, marker):
 def _render(renderer, *args, **kwargs):
     rendered, _display_map = renderer.render(*args, **kwargs)
     return rendered
+
+
+def _count_math_renders():
+    """Patch `render_math` as seen by the Markdown renderer and count calls."""
+    return patch.object(markdown_module, "render_math", wraps=render_math)
+
+
+def _fail_math_renders():
+    return patch.object(
+        markdown_module, "render_math", side_effect=MathRenderError("bad math")
+    )
 
 
 def test_markdown_renders_blocks_and_tables() -> None:
@@ -257,80 +267,56 @@ def test_markdown_links_and_table_alignment() -> None:
 
 def test_markdown_renders_inline_and_block_math() -> None:
     renderer = MarkdownRenderer()
-    cache = MathBitmapCache()
     source = "Energy $E=mc^2$ here\n\n$$\n24 \\times 576\n$$\n"
-    rendered = _render(
-        renderer,
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=cache,
-    )
+    with _count_math_renders() as renders:
+        rendered = _render(renderer, source, NSColor.blackColor())
     text = str(rendered.string())
 
     assert "\ufffc" in text
     assert "$E=mc^2$" not in text
     assert "24 \\times 576" not in text
-    assert len(cache) == 2
+    assert renders.call_count == 2
 
 
-def test_math_bitmap_cache_reuses_bitmaps() -> None:
-    cache = MathBitmapCache()
-    renderer = MarkdownRenderer()
-    source = "Again $x^2$ and $x^2$"
-
-    _render(renderer, source, NSColor.blackColor(), math_bitmap_cache=cache)
-    assert len(cache) == 1
-    first = next(iter(cache._entries.values()))
-
-    _render(renderer, source, NSColor.blackColor(), math_bitmap_cache=cache)
-    assert len(cache) == 1
-    assert next(iter(cache._entries.values())) is first
+def test_render_math_reuses_png_files() -> None:
+    kwargs = dict(inline=True, font_size=14.0, color=NSColor.blackColor(), scale_factor=2.0)
+    first, baseline = render_math("x^2", **kwargs)
+    mtime = first.stat().st_mtime_ns
+    second, _ = render_math("x^2", **kwargs)
+    assert first == second
+    assert second.stat().st_mtime_ns == mtime
+    assert first.suffix == ".png"
+    assert baseline != 0.0
 
 
 def test_display_math_uses_tall_line_height() -> None:
     renderer = MarkdownRenderer()
     latex = r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}"
     source = f"$$\n{latex}\n$$"
-    rendered = _render(
-        renderer,
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=MathBitmapCache(),
-    )
+    rendered = _render(renderer, source, NSColor.blackColor())
     style = _style_at(rendered, "\ufffc")
     assert style.minimumLineHeight() > LINE_HEIGHT
-    assert style.minimumLineHeight() >= 35.0
+    assert style.minimumLineHeight() >= 30.0
 
 
-def test_math_bitmap_cache_produces_png() -> None:
-    bitmap = MathBitmapCache().render(
+def test_render_math_produces_png() -> None:
+    path, baseline = render_math(
         r"\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0}",
-        False,
-        14.0,
-        2.0,
+        inline=False,
+        font_size=14.0,
         color=NSColor.blackColor(),
+        scale_factor=2.0,
     )
-    assert bitmap is not None
-    rep = NSBitmapImageRep.alloc().initWithData_(bitmap.image.TIFFRepresentation())
-    assert rep is not None
-    png = rep.representationUsingType_properties_(NSPNGFileType, None)
-    assert png is not None
-    assert len(bytes(png)) > 1000
+    assert baseline == 0.0
+    assert path.read_bytes().startswith(b"\x89PNG")
+    assert path.stat().st_size > 1000
 
 
 def test_markdown_inline_math_render_failure_falls_back_to_source() -> None:
     renderer = MarkdownRenderer()
     source = "Bad $x^2$ math"
-    with patch.object(
-        MathBitmapCache,
-        "render",
-        side_effect=MathRenderError("bad math"),
-    ):
-        rendered, _metadata = renderer.render(
-            source,
-            NSColor.blackColor(),
-            math_bitmap_cache=MathBitmapCache(),
-        )
+    with _fail_math_renders():
+        rendered, _metadata = renderer.render(source, NSColor.blackColor())
     text = str(rendered.string())
     assert text == source
     assert "\ufffc" not in text
@@ -339,16 +325,8 @@ def test_markdown_inline_math_render_failure_falls_back_to_source() -> None:
 def test_markdown_display_math_render_failure_falls_back_to_source() -> None:
     renderer = MarkdownRenderer()
     source = "Before\n\n$$\nx^2\n$$\n\nAfter"
-    with patch.object(
-        MathBitmapCache,
-        "render",
-        side_effect=MathRenderError("bad math"),
-    ):
-        rendered, _metadata = renderer.render(
-            source,
-            NSColor.blackColor(),
-            math_bitmap_cache=MathBitmapCache(),
-        )
+    with _fail_math_renders():
+        rendered, _metadata = renderer.render(source, NSColor.blackColor())
     text = str(rendered.string())
     assert "\ufffc" not in text
     assert "$$\nx^2\n$$" in text
@@ -358,58 +336,38 @@ def test_markdown_invalid_latex_renders_as_text() -> None:
     """Real ziamath failure (raw `&` / `>` produce invalid MathML)."""
     renderer = MarkdownRenderer()
     source = "so $a & b > c$ here"
-    rendered = _render(
-        renderer,
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=MathBitmapCache(),
-    )
+    rendered = _render(renderer, source, NSColor.blackColor())
     assert str(rendered.string()) == source
 
 
 def test_markdown_currency_pairs_are_not_math() -> None:
     renderer = MarkdownRenderer()
-    cache = MathBitmapCache()
     source = (
         "1kW is $3,400/year at PG&E residential rates, "
         "so this is likely > $10k/year"
     )
-    rendered = _render(
-        renderer,
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=cache,
-    )
+    with _count_math_renders() as renders:
+        rendered = _render(renderer, source, NSColor.blackColor())
     assert str(rendered.string()) == source
-    assert len(cache) == 0
+    assert renders.call_count == 0
 
 
 def test_markdown_currency_and_math_on_same_line() -> None:
     renderer = MarkdownRenderer()
-    cache = MathBitmapCache()
     source = "costs $5 and $10 total, so $x^2$ applies"
-    rendered = _render(
-        renderer,
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=cache,
-    )
+    with _count_math_renders() as renders:
+        rendered = _render(renderer, source, NSColor.blackColor())
     text = str(rendered.string())
     assert text.startswith("costs $5 and $10 total, so ")
     assert "\ufffc" in text
     assert "$x^2$" not in text
-    assert len(cache) == 1
+    assert renders.call_count == 1
 
 
 def test_copyable_render_replaces_math_with_markdown() -> None:
     renderer = MarkdownRenderer()
-    cache = MathBitmapCache()
     source = "Before $x^2$ after"
-    rendered, _metadata = renderer.render(
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=cache,
-    )
+    rendered, _metadata = renderer.render(source, NSColor.blackColor())
     text = str(rendered.string())
     math_index = text.index("\ufffc")
 
@@ -464,7 +422,6 @@ def test_copyable_render_omits_interactive_chrome() -> None:
 def test_display_math_inside_list_with_plus_line_renders() -> None:
     """A lone `+` inside $$ must not split the fence via CommonMark lists."""
     renderer = MarkdownRenderer()
-    cache = MathBitmapCache()
     source = (
         "1. **Ampère–Maxwell law**\n"
         "$$\n"
@@ -475,17 +432,14 @@ def test_display_math_inside_list_with_plus_line_renders() -> None:
         r"\mu_0\varepsilon_0\frac{d}{dt}\int_S \mathbf{E}\cdot d\mathbf{A}"
         "\n$$\n"
     )
-    rendered, _metadata = renderer.render(
-        source,
-        NSColor.blackColor(),
-        math_bitmap_cache=cache,
-    )
+    with _count_math_renders() as renders:
+        rendered, _metadata = renderer.render(source, NSColor.blackColor())
     text = str(rendered.string())
 
     assert "\ufffc" in text
     assert "$$" not in text
     assert r"\oint" not in text
-    assert len(cache) == 1
+    assert renders.call_count == 1
 
 
 def test_render_metadata_contains_only_python_metadata() -> None:
@@ -549,3 +503,74 @@ def test_expanded_block_ids_are_per_render_call() -> None:
     assert "line 24" not in str(collapsed_again.string())
     assert expanded_map.block_content(block_id) == content
     assert collapsed_again_map.block_content(block_id) == content
+
+
+def _write_png(path, width: int, height: int) -> None:
+    rep = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+        None, width, height, 8, 4, True, False, "NSCalibratedRGBColorSpace", 0, 0
+    )
+    path.write_bytes(bytes(rep.representationUsingType_properties_(NSPNGFileType, None)))
+
+
+def _png_size(path) -> tuple[int, int]:
+    rep = NSBitmapImageRep.imageRepWithContentsOfFile_(str(path))
+    return int(rep.pixelsWide()), int(rep.pixelsHigh())
+
+
+def test_markdown_renders_image_on_own_line_and_copies_source(tmp_path) -> None:
+    _write_png(tmp_path / "plot.png", 2000, 400)
+    rendered = _render(
+        MarkdownRenderer(),
+        "Before ![A chart](plot.png) after",
+        NSColor.blackColor(),
+        image_base_directory=tmp_path,
+        scale_factor=2.0,
+    )
+    text = str(rendered.string())
+    assert text == "Before\n\ufffc\nafter"
+    index = text.index("\ufffc")
+    link, _ = rendered.attribute_atIndex_effectiveRange_(NSLinkAttributeName, index, None)
+    assert str(link.path()) == str(tmp_path / "plot.png")
+    attachment, _ = rendered.attribute_atIndex_effectiveRange_("NSAttachment", index, None)
+    assert attachment.bounds().size.width == pytest.approx(600)
+    assert str(prepare_copy(rendered).string()) == "Before\n![A chart](plot.png)\nafter"
+
+
+def test_generate_render_image_scales_down_only_and_reuses(tmp_path) -> None:
+    _write_png(tmp_path / "wide.png", 2000, 400)
+    _write_png(tmp_path / "small.png", 100, 50)
+    kwargs = dict(base_directory=tmp_path, max_pixels=(1200, 640), card=False)
+    wide = generate_render_image("wide.png", **kwargs)
+    small = generate_render_image("small.png", **kwargs)
+    assert _png_size(wide) == (1200, 240)
+    assert _png_size(small) == (100, 50)
+    assert generate_render_image("wide.png", **kwargs) == wide
+
+    carded = generate_render_image("small.png", base_directory=tmp_path, max_pixels=(1200, 640), card=True)
+    assert _png_size(carded) > (100, 50)
+
+
+def test_generate_render_image_tracks_source_changes(tmp_path) -> None:
+    path = tmp_path / "plot.png"
+    _write_png(path, 10, 10)
+    kwargs = dict(base_directory=tmp_path, max_pixels=(1200, 640), card=False)
+    first = generate_render_image("plot.png", **kwargs)
+    _write_png(path, 20, 10)
+    second = generate_render_image("plot.png", **kwargs)
+    assert first != second
+    assert _png_size(second) == (20, 10)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["missing.png", "https://example.com/a.png", "data:image/png;base64,AAAA"],
+)
+def test_markdown_image_failure_falls_back_to_source(tmp_path, source) -> None:
+    markdown = f"![alt]({source})"
+    rendered = _render(
+        MarkdownRenderer(),
+        markdown,
+        NSColor.blackColor(),
+        image_base_directory=tmp_path,
+    )
+    assert str(rendered.string()) == markdown

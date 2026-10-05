@@ -5,7 +5,14 @@ import threading
 
 from macagentic.agent import Agent
 from macagentic.app import app
-from macagentic.ui.projection import format_usage, render_conversation
+from macagentic.ui.conversation_markdown import format_usage, render_conversation
+from macagentic.ui.terminal_images import inline_images
+
+
+def _print_conversation(agent: Agent, content: str) -> None:
+    content = inline_images(content, agent.root)
+    if content:
+        print(content, end="", flush=True)
 
 
 class CommandLineUI:
@@ -65,8 +72,7 @@ class CommandLineUI:
                 show_tool_status=False,
                 show_tool_output=self.show_tool_output,
             )
-            if content:
-                print(content, end="", flush=True)
+            _print_conversation(self.agent, content)
 
 
 def run_batch(request: str) -> None:
@@ -77,6 +83,5 @@ def run_batch(request: str) -> None:
         show_tool_status=False,
         show_tool_output=app.show_tool_output,
     )
-    if content:
-        print(content, end="")
+    _print_conversation(agent, content)
     print(format_usage(agent.usage.snapshot()))

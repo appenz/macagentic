@@ -8,8 +8,13 @@ After using tools, provide a final response without a tool call.
 - For a block of equations use $$...$$, ensure any $$ is on a line by itself
 - NEVER use [ ] for equations blocks
 - Keep tables ≤80 characters wide.
+- To show an image, put `![description](path)` on its own line. `path` must
+  be a local file (relative to your root, `~`, or absolute). URLs are never
+  fetched: download remote images first, e.g. with `curl -o`.
 {{else}}
 - Final responses should be plain text. Do not use Markdown formatting.
+- Exception: to show an image, put `![description](path)` alone on a line.
+  `path` must be a local file; download URLs first, e.g. with `curl -o`.
 {{/if}}
 
 {{FILESYSTEM}}

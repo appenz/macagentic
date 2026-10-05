@@ -55,14 +55,13 @@ from macagentic.config import MODEL_TIERS
 from macagentic.history import save_history
 from macagentic.session import SavedSession, SavedTab, save_session as write_session
 from macagentic.ui.helpers import request_fast_text
-from macagentic.ui.math_render import MathBitmapCache
 from macagentic.ui.markdown import (
     FONT_SIZE,
     MarkdownRenderMetadata,
     MarkdownRenderer,
     prepare_copy,
 )
-from macagentic.ui.projection import (
+from macagentic.ui.conversation_markdown import (
     display_model_name,
     render_conversation,
     render_history,
@@ -751,7 +750,6 @@ class UITab:
         self.input_text = input_text
         self.tool_call_descriptions: dict[str, str] = {}
         self.display_event_index = 0
-        self.math_bitmap_cache = MathBitmapCache()
         self.expanded_block_ids: set[str] = set()
         self.tab_bar_item: TabBarItemView | None = None
         self.content_view: TabContentView | None = None
@@ -1200,7 +1198,7 @@ class MacAgenticUI:
             transcript,
             NSColor.darkGrayColor(),
             expanded_block_ids=tab.expanded_block_ids,
-            math_bitmap_cache=tab.math_bitmap_cache,
+            image_base_directory=tab.agent.root,
             scale_factor=self._window_backing_scale(),
         )
         content_height = self._measure(cocoa_text)

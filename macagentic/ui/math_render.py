@@ -1,11 +1,16 @@
-"""LaTeX math rendering via ziamath and WebKit."""
+"""LaTeX math rendering via ziamath and WebKit.
+
+Public API: `render_math()` (see `specs/markdown_cocoa.md`).
+"""
 
 from __future__ import annotations
 
+import tempfile
 import time
-from dataclasses import dataclass
+from hashlib import sha1
+from pathlib import Path
 
-from AppKit import NSApplication, NSBitmapImageRep, NSColorSpace
+from AppKit import NSApplication, NSBitmapImageRep, NSColorSpace, NSPNGFileType
 from Cocoa import NSColor, NSImage
 from Foundation import NSDate, NSMakeRect, NSRunLoop, NSURL, NSThread
 from WebKit import WKSnapshotConfiguration, WKWebView
@@ -13,69 +18,77 @@ from WebKit import WKSnapshotConfiguration, WKWebView
 import ziamath as zm
 
 _WEBVIEW: WKWebView | None = None
+_CACHE_DIR = Path(tempfile.gettempdir()) / "macagentic-images"
 
 # STIX (ziamath) glyphs measure ~10% shorter than SF Pro at the same
 # nominal point size; scale so inline math matches surrounding text.
 _ZIAMATH_SIZE_SCALE = 1.1
 
 
-@dataclass(frozen=True)
-class _CacheKey:
-    latex: str
-    inline: bool
-    font_size: float
-    color_hex: str
-    scale_factor: float
-
-
-@dataclass(frozen=True)
-class MathBitmap:
-    image: NSImage
-    size: tuple[float, float]
-    baseline: float
-
-
 class MathRenderError(RuntimeError):
     pass
 
 
-class MathBitmapCache:
-    """Tab-scoped cache of rendered math bitmaps. Keys are private."""
+def render_math(
+    latex: str,
+    *,
+    inline: bool,
+    font_size: float,
+    color: NSColor,
+    scale_factor: float,
+) -> tuple[Path, float]:
+    """Render LaTeX to a PNG at `scale_factor` pixels per point.
 
-    def __init__(self) -> None:
-        self._entries: dict[_CacheKey, MathBitmap] = {}
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-    def render(
-        self,
-        latex: str,
-        inline: bool,
-        font_size: float,
-        scale_factor: float,
-        *,
-        color: NSColor,
-    ) -> MathBitmap:
-        key = _CacheKey(
-            latex=latex,
-            inline=inline,
-            font_size=font_size,
-            color_hex=_color_hex(color),
-            scale_factor=scale_factor,
+    Returns the PNG path and the baseline offset in points (0 for display
+    math). Output is content-addressed and reused.
+    """
+    if not latex.strip():
+        raise MathRenderError("Empty LaTeX expression")
+    color_hex = _color_hex(color)
+    expr = _latex(latex, inline=inline, font_size=font_size, color_hex=color_hex)
+    baseline = float(expr.getyofst()) if inline else 0.0
+    key = sha1(
+        f"math|{latex}|{inline}|{font_size}|{color_hex}|{scale_factor}".encode()
+    ).hexdigest()
+    path = _CACHE_DIR / f"{key}.png"
+    if not path.exists():
+        width, height = expr.getsize()
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        png = _on_main_thread(
+            lambda: _svg_to_png(expr.svg(), width, height, scale_factor=scale_factor)
         )
-        cached = self._entries.get(key)
-        if cached is not None:
-            return cached
-        bitmap = _render_latex_to_bitmap(
+        path.write_bytes(png)
+    return path, baseline
+
+
+def _latex(latex: str, *, inline: bool, font_size: float, color_hex: str) -> zm.Latex:
+    try:
+        # margin=0 so SVG width/height match getsize(); default margin=1
+        # would pad the SVG and shrink glyphs when scaled into getsize bounds.
+        return zm.Latex(
             latex,
-            inline,
-            font_size,
-            scale_factor,
-            color=color,
+            size=font_size * _ZIAMATH_SIZE_SCALE,
+            inline=inline,
+            color=color_hex,
+            margin=0,
         )
-        self._entries[key] = bitmap
-        return bitmap
+    except (ValueError, TypeError, SyntaxError, KeyError, AttributeError) as error:
+        raise MathRenderError(f"Invalid LaTeX: {latex!r}") from error
+
+
+def _on_main_thread(work):
+    if NSThread.isMainThread():
+        return work()
+
+    from dispatch import dispatch_get_main_queue, dispatch_sync
+
+    result: dict[str, object] = {}
+
+    def wrapper() -> None:
+        result["value"] = work()
+
+    dispatch_sync(dispatch_get_main_queue(), wrapper)
+    return result["value"]
 
 
 def _color_hex(color: NSColor) -> str:
@@ -136,13 +149,14 @@ def _bitmap_has_content(rep: NSBitmapImageRep) -> bool:
     return False
 
 
-def _svg_to_nsimage(
+def _svg_to_png(
     svg: str,
     width: float,
     height: float,
     *,
     scale_factor: float,
-) -> NSImage:
+) -> bytes:
+    _ensure_application()
     # WebKit snapshots at 1x are blank for small ziamath SVGs; rasterize at 2x min.
     # CSS-scale the SVG to fill the snapshot so glyphs match font_size points.
     scale = max(scale_factor, 2.0)
@@ -191,81 +205,27 @@ def _svg_to_nsimage(
     if not _bitmap_has_content(rep):
         raise MathRenderError("WebKit produced a blank math snapshot")
 
-    point_size = (width, height)
-    rep.setSize_(point_size)
-    image = NSImage.alloc().initWithSize_(point_size)
-    image.addRepresentation_(rep)
-    return image
+    if scale != scale_factor:
+        rep = _resample(rep, int(round(width * scale_factor)), int(round(height * scale_factor)))
+    return bytes(rep.representationUsingType_properties_(NSPNGFileType, None))
 
 
-def _render_latex_to_bitmap_main(
-    latex: str,
-    inline: bool,
-    font_size: float,
-    scale_factor: float,
-    *,
-    color_hex: str,
-) -> MathBitmap:
-    _ensure_application()
+def _resample(rep: NSBitmapImageRep, pixel_width: int, pixel_height: int) -> NSBitmapImageRep:
+    from AppKit import NSGraphicsContext, NSCompositingOperationCopy
 
-    try:
-        # margin=0 so SVG width/height match getsize(); default margin=1
-        # would pad the SVG and shrink glyphs when scaled into getsize bounds.
-        expr = zm.Latex(
-            latex,
-            size=font_size * _ZIAMATH_SIZE_SCALE,
-            inline=inline,
-            color=color_hex,
-            margin=0,
-        )
-    except (ValueError, TypeError, SyntaxError, KeyError, AttributeError) as error:
-        raise MathRenderError(f"Invalid LaTeX: {latex!r}") from error
-
-    width, height = expr.getsize()
-    baseline = expr.getyofst()
-    svg = expr.svg()
-    image = _svg_to_nsimage(
-        svg,
-        width,
-        height,
-        scale_factor=scale_factor,
+    source = NSImage.alloc().initWithSize_((rep.pixelsWide(), rep.pixelsHigh()))
+    source.addRepresentation_(rep)
+    target = NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+        None, max(1, pixel_width), max(1, pixel_height), 8, 4, True, False,
+        "NSCalibratedRGBColorSpace", 0, 0,
     )
-    return MathBitmap(image=image, size=(width, height), baseline=baseline)
-
-
-def _render_latex_to_bitmap(
-    latex: str,
-    inline: bool,
-    font_size: float,
-    scale_factor: float,
-    *,
-    color: NSColor,
-) -> MathBitmap:
-    if not latex.strip():
-        raise MathRenderError("Empty LaTeX expression")
-
-    color_hex = _color_hex(color)
-    if NSThread.isMainThread():
-        return _render_latex_to_bitmap_main(
-            latex,
-            inline,
-            font_size,
-            scale_factor,
-            color_hex=color_hex,
-        )
-
-    from dispatch import dispatch_get_main_queue, dispatch_sync
-
-    result: dict[str, MathBitmap] = {}
-
-    def wrapper() -> None:
-        result["value"] = _render_latex_to_bitmap_main(
-            latex,
-            inline,
-            font_size,
-            scale_factor,
-            color_hex=color_hex,
-        )
-
-    dispatch_sync(dispatch_get_main_queue(), wrapper)
-    return result["value"]
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.setCurrentContext_(
+        NSGraphicsContext.graphicsContextWithBitmapImageRep_(target)
+    )
+    source.drawInRect_fromRect_operation_fraction_(
+        ((0, 0), (pixel_width, pixel_height)), ((0, 0), (0, 0)),
+        NSCompositingOperationCopy, 1.0,
+    )
+    NSGraphicsContext.restoreGraphicsState()
+    return target

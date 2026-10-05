@@ -115,6 +115,7 @@ class FakeAgent:
         self.usage = UsageTracker()
         self.model_name = "openai/gpt-5-mini"
         self.interrupted = False
+        self.root = OUTPUT_DIR
 
     def run_turn(self, text: str) -> None:
         # Assistant-only transcript so screenshots are not duplicated by the

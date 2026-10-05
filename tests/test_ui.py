@@ -16,7 +16,7 @@ from Cocoa import (
 
 from macagentic.agent import ConversationLog, UsageTracker
 from macagentic.ui.markdown import FONT_SIZE, MarkdownRenderer
-from macagentic.ui.projection import render_history
+from macagentic.ui.conversation_markdown import render_history
 from macagentic.ui.testing import UITestDriver
 from macagentic.ui.updates import SetTabTitle, SetToolCallDescription
 
@@ -33,6 +33,7 @@ class FakeAgent:
         self.usage = UsageTracker()
         self.model_name = "openai/gpt-5-mini"
         self.interrupted = False
+        self.root = Path("/tmp/macagentic-test-root")
 
     def run_turn(self, text: str) -> None:
         self.conversation_log.append(

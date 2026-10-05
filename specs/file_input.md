@@ -1,6 +1,6 @@
-# Image and PDF Handling
+# Files into Model Context
 
-macAgentic exposes the global shell command:
+The global shell command stages a local file as multimodal model input:
 
 ```sh
 macagentic-read-file PATH

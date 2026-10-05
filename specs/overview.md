@@ -70,8 +70,9 @@ only AppKit's main thread mutates UI state. Open tabs and conversations are
 restored for the same workspace across normal application restarts.
 
 The Cocoa transcript renders native Markdown, collapsible blocks, tables, links,
-and rasterized LaTeX while leaving the conversation log unchanged. The CLI
-projects that same log as plain text.
+rasterized LaTeX, and local images while leaving the conversation log
+unchanged. The CLI projects that same log as plain text, drawing images inline
+when the terminal supports it.
 
 ## Specs
 
@@ -79,11 +80,16 @@ projects that same log as plain text.
 - `agent.md` — Agent state, model loop, filesystem, and interruption.
 - `app.md` — Global application configuration and agent creation.
 - `config.md` — TOML, model presets, mounts, and CLI precedence.
-- `image_pdf_handling.md` — Staging images and PDFs for model context.
-- `markdown_rendering.md` — Native Markdown, math, copy, and paste behavior.
+- `file_input.md` — Staging images and PDFs as model input.
+- `markdown_images.md` — Image references in conversation Markdown.
+- `markdown_cli.md` — Plain-text projection and terminal inline images.
+- `markdown_cocoa.md` — Native Markdown, math, images, copy, and paste behavior.
 - `skills.md` — Skill discovery, exposure, and slash-command expansion.
 - `testing.md` — Screenshot and manual visual-testing workflows.
 - `ui.md` — CLI and Cocoa ownership, tabs, updates, and persistence.
 - `usage.md` — Token, cache, cost accounting, and presentation.
-- `future_fusefs.md` — Unimplemented FUSE workspace proposal; ignore for current work.
+
+Unimplemented proposals live under `future/`; ignore them for current work.
+
+- `future/fusefs.md` — FUSE workspace proposal.
 

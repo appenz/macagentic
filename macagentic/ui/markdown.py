@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from hashlib import sha1
 import logging
+from pathlib import Path
 import re
 
 from Cocoa import (
@@ -26,15 +27,16 @@ from Foundation import (
     NSMutableParagraphStyle,
     NSURL,
 )
-from AppKit import NSTextAttachment, NSTextTab, NSScreen, NSTextAlignmentCenter
+from AppKit import NSTextTab, NSScreen, NSTextAlignmentCenter
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from markdown_it import MarkdownIt
 
-from macagentic.ui.math_render import (
-    MathBitmap,
-    MathBitmapCache,
-    MathRenderError,
+from macagentic.ui.image_render import (
+    ImageError,
+    generate_render_image,
+    image_attachment,
 )
+from macagentic.ui.math_render import MathRenderError, render_math
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,7 +53,11 @@ CODE_FONT_SIZE = 12.0
 COLLAPSE_AFTER_LINES = 20
 COLLAPSE_PREVIEW_LINES = 5
 COPY_OMIT_ATTRIBUTE = "MacAgenticCopyOmit"
-MATH_SOURCE_ATTRIBUTE = "MacAgenticMathSource"
+IMAGE_SOURCE_ATTRIBUTE = "MacAgenticImageSource"  # Markdown behind an attachment
+# Approximate transcript text width (see MacAgenticUI._measure) and the
+# height cap from specs/markdown_cocoa.md, in points.
+IMAGE_MAX_WIDTH = 600.0
+IMAGE_MAX_HEIGHT = 320.0
 
 
 def _attributed(
@@ -313,46 +319,89 @@ def _backing_scale() -> float:
     return float(screen.backingScaleFactor())
 
 
-def _math_line_height(bitmap: MathBitmap) -> float:
-    _width, height = bitmap.size
-    return max(LINE_HEIGHT, height - bitmap.baseline)
+BLOCK_IMAGE_ATTRIBUTE = "MacAgenticBlockImage"  # own-line attachment marker
 
 
-def _append_math_attachment(
+def _insert_image(
     result,
-    latex: str,
+    render,
     *,
-    copy_source: str,
-    inline: bool,
+    source: str,
+    block: bool,
     color,
-    font_size: float,
-    math_bitmap_cache: MathBitmapCache,
+    font,
     scale_factor: float,
-) -> tuple[int, int, MathBitmap]:
+    link=None,
+) -> bool:
+    """Insert the image produced by `render()`; fall back to `source` text.
+
+    `render` returns `(png_path, baseline)`. Block images occupy their own
+    line; their paragraph is fitted later by `_fit_block_images`. Returns
+    whether an image was inserted.
+    """
+    try:
+        path, baseline = render()
+        attachment = image_attachment(path, scale_factor=scale_factor, baseline=baseline)
+    except (MathRenderError, ImageError) as error:
+        _LOGGER.warning("Image fell back to source text: %s", error)
+        result.appendAttributedString_(
+            _attributed(source, color=color.colorWithAlphaComponent_(0.7), font=font)
+        )
+        return False
+    if block:
+        text = str(result.string())
+        trailing = len(text) - len(text.rstrip(" \t"))
+        if trailing:
+            result.deleteCharactersInRange_((len(text) - trailing, trailing))
+        if result.length() and not text.rstrip(" \t").endswith("\n"):
+            result.appendAttributedString_(_attributed("\n", color=color, font=font))
     start = result.length()
-    bitmap = math_bitmap_cache.render(
-        latex,
-        inline,
-        font_size,
-        scale_factor,
-        color=color,
-    )
-    attachment = NSTextAttachment.alloc().init()
-    attachment.setImage_(bitmap.image)
-    width, height = bitmap.size
-    attachment.setBounds_(((0.0, bitmap.baseline), (width, height)))
     result.appendAttributedString_(
         NSAttributedString.attributedStringWithAttachment_(attachment)
     )
-    result.addAttributes_range_(
-        {
-            MATH_SOURCE_ATTRIBUTE: copy_source,
-            NSForegroundColorAttributeName: color,
-            NSFontAttributeName: NSFont.systemFontOfSize_(font_size),
-        },
-        (start, result.length() - start),
-    )
-    return start, result.length(), bitmap
+    attributes = {
+        IMAGE_SOURCE_ATTRIBUTE: source,
+        NSForegroundColorAttributeName: color,
+        NSFontAttributeName: font,
+    }
+    if block:
+        attributes[BLOCK_IMAGE_ATTRIBUTE] = True
+    if link is not None:
+        attributes[NSLinkAttributeName] = link
+    result.addAttributes_range_(attributes, (start, result.length() - start))
+    return True
+
+
+def _image_link(source: str, base_directory: Path):
+    """File URL for a local Markdown image source, or None for URLs."""
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", source):
+        return None
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = base_directory / path
+    return NSURL.fileURLWithPath_(str(path))
+
+
+def _fit_block_images(block) -> None:
+    """Center each block image and fit its paragraph's line height to it."""
+    index = 0
+    string = block.string()
+    while index < block.length():
+        attributes, effective = block.attributesAtIndex_effectiveRange_(index, None)
+        end = effective.location + effective.length
+        if attributes.get(BLOCK_IMAGE_ATTRIBUTE):
+            attachment = attributes.get(NSAttachmentAttributeName)
+            height = float(attachment.bounds().size.height) + BLOCK_GAP
+            paragraph = string.paragraphRangeForRange_((index, 1))
+            base = attributes.get(NSParagraphStyleAttributeName)
+            style = base.mutableCopy() if base is not None else _paragraph_style()
+            style.setMinimumLineHeight_(height)
+            style.setMaximumLineHeight_(height)
+            style.setAlignment_(NSTextAlignmentCenter)
+            block.addAttribute_value_range_(
+                NSParagraphStyleAttributeName, style, paragraph
+            )
+        index = end
 
 
 def _linkify_text(text, color, font):
@@ -440,16 +489,21 @@ def prepare_copy(attributed) -> NSMutableAttributedString:
             index = end
             continue
 
-        math_source = attributes.get(MATH_SOURCE_ATTRIBUTE)
-        if math_source is not None:
+        image_source = attributes.get(IMAGE_SOURCE_ATTRIBUTE)
+        if image_source is not None:
             copy_attributes = dict(attributes)
-            copy_attributes.pop(NSAttachmentAttributeName, None)
-            copy_attributes.pop(MATH_SOURCE_ATTRIBUTE, None)
-            copy_attributes.pop(NSBackgroundColorAttributeName, None)
-            copy_attributes.pop(COPY_OMIT_ATTRIBUTE, None)
+            for name in (
+                NSAttachmentAttributeName,
+                NSLinkAttributeName,
+                IMAGE_SOURCE_ATTRIBUTE,
+                BLOCK_IMAGE_ATTRIBUTE,
+                NSBackgroundColorAttributeName,
+                COPY_OMIT_ATTRIBUTE,
+            ):
+                copy_attributes.pop(name, None)
             rich.appendAttributedString_(
                 NSAttributedString.alloc().initWithString_attributes_(
-                    str(math_source),
+                    str(image_source),
                     copy_attributes,
                 )
             )
@@ -489,13 +543,13 @@ class MarkdownRenderer:
         color,
         *,
         expanded_block_ids: set[str] | frozenset[str] = frozenset(),
-        math_bitmap_cache: MathBitmapCache | None = None,
+        image_base_directory: Path | None = None,
         scale_factor: float | None = None,
     ) -> tuple[NSMutableAttributedString, MarkdownRenderMetadata]:
         source = text.rstrip()
         parse_source, display_math, anchors = _extract_display_math(source)
         expanded = set(expanded_block_ids)
-        cache = math_bitmap_cache if math_bitmap_cache is not None else MathBitmapCache()
+        base_directory = image_base_directory or Path.cwd()
         backing_scale = scale_factor if scale_factor is not None else _backing_scale()
         tokens = self._parser.parse(parse_source)
         block_contents: dict[str, str] = {}
@@ -511,7 +565,7 @@ class MarkdownRenderer:
                     tokens,
                     i,
                     color,
-                    math_bitmap_cache=cache,
+                    base_directory=base_directory,
                     scale_factor=backing_scale,
                 )
                 blocks.append((token.type, list_text, None))
@@ -525,7 +579,6 @@ class MarkdownRenderer:
                     display_math=display_math,
                     parse_source=parse_source,
                     anchors=anchors,
-                    math_bitmap_cache=cache,
                     scale_factor=backing_scale,
                 )
                 blocks.append((token.type, block, None))
@@ -610,7 +663,7 @@ class MarkdownRenderer:
                             color,
                             base_font=font,
                             inline_content=inline_content,
-                            math_bitmap_cache=cache,
+                            base_directory=base_directory,
                             scale_factor=backing_scale,
                         )
                         block.appendAttributedString_(inline_block)
@@ -626,6 +679,7 @@ class MarkdownRenderer:
                         _paragraph_style(line_height=line_height),
                         (0, block.length()),
                     )
+                    _fit_block_images(block)
                 blocks.append((token.type, block, None))
                 i += 1
                 continue
@@ -658,7 +712,6 @@ class MarkdownRenderer:
         display_math,
         parse_source,
         anchors,
-        math_bitmap_cache,
         scale_factor,
     ):
         latex = (token.content or "").strip()
@@ -677,38 +730,22 @@ class MarkdownRenderer:
             md_end = _map_parse_to_source(md_end, anchors)
         copy_source = source[md_start:md_end].strip() or f"$${latex}$$"
         block = NSMutableAttributedString.alloc().init()
-        try:
-            _, _, bitmap = _append_math_attachment(
-                block,
-                latex,
-                copy_source=copy_source,
-                inline=False,
-                color=color,
-                font_size=FONT_SIZE,
-                math_bitmap_cache=math_bitmap_cache,
-                scale_factor=scale_factor,
-            )
-        except MathRenderError as error:
-            _LOGGER.warning("Display math fell back to source text: %s", error)
-            block.appendAttributedString_(
-                _attributed(copy_source, color=color)
-            )
-            block.addAttribute_value_range_(
-                NSParagraphStyleAttributeName,
-                _paragraph_style(),
-                (0, block.length()),
-            )
-            return block
-        line_height = _math_line_height(bitmap)
-        style = NSMutableParagraphStyle.alloc().init()
-        style.setAlignment_(NSTextAlignmentCenter)
-        style.setMinimumLineHeight_(line_height)
-        style.setMaximumLineHeight_(line_height)
-        block.addAttribute_value_range_(
-            NSParagraphStyleAttributeName,
-            style,
-            (0, block.length()),
+        font = NSFont.systemFontOfSize_(FONT_SIZE)
+        _insert_image(
+            block,
+            lambda: render_math(
+                latex, inline=False, font_size=FONT_SIZE, color=color, scale_factor=scale_factor
+            ),
+            source=copy_source,
+            block=True,
+            color=color,
+            font=font,
+            scale_factor=scale_factor,
         )
+        block.addAttribute_value_range_(
+            NSParagraphStyleAttributeName, _paragraph_style(), (0, block.length())
+        )
+        _fit_block_images(block)
         return block
 
     @staticmethod
@@ -746,7 +783,7 @@ class MarkdownRenderer:
         color,
         depth: int = 0,
         *,
-        math_bitmap_cache,
+        base_directory,
         scale_factor,
     ):
         font = NSFont.systemFontOfSize_(FONT_SIZE)
@@ -808,7 +845,7 @@ class MarkdownRenderer:
                                 color,
                                 base_font=font,
                                 inline_content=inline_content,
-                                math_bitmap_cache=math_bitmap_cache,
+                                base_directory=base_directory,
                                 scale_factor=scale_factor,
                             )
                             item_line.appendAttributedString_(inline_block)
@@ -823,7 +860,7 @@ class MarkdownRenderer:
                         i,
                         color,
                         depth + 1,
-                        math_bitmap_cache=math_bitmap_cache,
+                        base_directory=base_directory,
                         scale_factor=scale_factor,
                     )
                     nested.appendAttributedString_(
@@ -839,6 +876,7 @@ class MarkdownRenderer:
                 style,
                 (0, item_line.length()),
             )
+            _fit_block_images(item_line)
             result.appendAttributedString_(item_line)
             if nested.length() > 0:
                 result.appendAttributedString_(nested)
@@ -852,7 +890,7 @@ class MarkdownRenderer:
         base_font=None,
         *,
         inline_content: str = "",
-        math_bitmap_cache,
+        base_directory,
         scale_factor,
     ):
         result = NSMutableAttributedString.alloc().init()
@@ -925,26 +963,52 @@ class MarkdownRenderer:
                 )
                 index += 1
                 continue
+            if child.type == "image":
+                src = child.attrGet("src") or ""
+                max_pixels = (int(IMAGE_MAX_WIDTH * scale_factor), int(IMAGE_MAX_HEIGHT * scale_factor))
+                shown = _insert_image(
+                    result,
+                    lambda: (
+                        generate_render_image(
+                            src, base_directory=base_directory, max_pixels=max_pixels, card=True
+                        ),
+                        0.0,
+                    ),
+                    source=f"![{child.content or ''}]({src})",
+                    block=True,
+                    color=color,
+                    font=font,
+                    scale_factor=scale_factor,
+                    link=_image_link(src, base_directory),
+                )
+                index += 1
+                # Keep following inline text off the image's line.
+                if shown and index < len(children) and children[index].type != "softbreak":
+                    following = children[index]
+                    if following.type == "text":
+                        following.content = (following.content or "").lstrip(" \t")
+                    result.appendAttributedString_(
+                        _attributed("\n", color=color, font=font)
+                    )
+                continue
             if child.type == "math_inline":
                 latex = child.content or ""
                 markup = child.markup or "$"
-                source = _math_inline_source(inline_content, latex, markup)
-                try:
-                    _append_math_attachment(
-                        result,
+                _insert_image(
+                    result,
+                    lambda: render_math(
                         latex,
-                        copy_source=source,
                         inline=True,
-                        color=color,
                         font_size=font.pointSize(),
-                        math_bitmap_cache=math_bitmap_cache,
+                        color=color,
                         scale_factor=scale_factor,
-                    )
-                except MathRenderError as error:
-                    _LOGGER.warning("Inline math fell back to source text: %s", error)
-                    result.appendAttributedString_(
-                        _attributed(source, color=color, font=font)
-                    )
+                    ),
+                    source=_math_inline_source(inline_content, latex, markup),
+                    block=False,
+                    color=color,
+                    font=font,
+                    scale_factor=scale_factor,
+                )
                 index += 1
                 continue
 
