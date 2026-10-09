@@ -1,13 +1,20 @@
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import litellm
 
 from macagentic.ui.helpers.assistant_text import assistant_text
 
-FAST_MODEL = "openai/gpt-5.4-nano"
+FAST_MODEL = "openai/gpt-6-luna"
 MAX_ERROR_CHARS = 200
+PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+TOOL_UPDATE_PROMPT_PATH = PROMPTS_DIR / "tool_update.md"
+
+
+def load_prompt(path: Path) -> str:
+    return path.read_text().strip()
 
 
 def one_line_error(error: BaseException) -> str:

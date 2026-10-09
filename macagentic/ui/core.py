@@ -55,6 +55,7 @@ from macagentic.config import MODEL_TIERS
 from macagentic.history import save_history
 from macagentic.session import SavedSession, SavedTab, save_session as write_session
 from macagentic.ui.helpers import request_fast_text
+from macagentic.ui.helpers.fast_llm import TOOL_UPDATE_PROMPT_PATH, load_prompt
 from macagentic.ui.markdown import (
     FONT_SIZE,
     MarkdownRenderMetadata,
@@ -1128,13 +1129,7 @@ class MacAgenticUI:
                 command = str(action.get("command", ""))
                 tab_id = tab.id
                 request_fast_text(
-                    system_prompt=(
-                        "Write a concise, user-facing progress update describing "
-                        "what the command is accomplishing, not how it works. "
-                        "Include the source and specific subject when available. "
-                        "Use a 4-9 word gerund phrase. Return only the update with "
-                        "no punctuation."
-                    ),
+                    system_prompt=load_prompt(TOOL_UPDATE_PROMPT_PATH),
                     user_prompt=(
                         f"User request:\n{user_request}\n\n"
                         f"Command:\n{command}"
@@ -1652,5 +1647,11 @@ TOOL_UPDATE_MAX_LENGTH = 80
 
 
 def _clean_description(value: str) -> str:
-    description = " ".join(value.splitlines()[0].split()).strip("\"'` .:;-")
-    return description[:TOOL_UPDATE_MAX_LENGTH] or "Running command"
+    description = " ".join(value.splitlines()[0].split()).strip("\"' .:;-")
+    # Unwrap a fully backticked reply, but keep inline `name` spans intact.
+    if len(description) >= 2 and description[0] == description[-1] == "`":
+        description = description[1:-1].strip()
+    description = description[:TOOL_UPDATE_MAX_LENGTH]
+    if description.count("`") % 2:
+        description += "`"
+    return description or "Running command"

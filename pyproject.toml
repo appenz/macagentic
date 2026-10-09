@@ -20,7 +20,7 @@ dev = [
 ]
 
 [tool.setuptools.package-data]
-"macagentic.ui" = ["assets/*.png"]
+"macagentic.ui" = ["assets/*.png", "prompts/*.md"]
 "macagentic.agent" = ["prompts/*.md"]
 
 [tool.pytest.ini_options]

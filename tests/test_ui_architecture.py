@@ -7,7 +7,11 @@ from macagentic.app import MacAgenticApp
 from macagentic.ui.cli import CommandLineUI
 from macagentic.ui.core import TOOL_UPDATE_MAX_LENGTH, _clean_description
 from macagentic.ui.helpers.fast_llm import request_fast_text
-from macagentic.ui.conversation_markdown import render_conversation, render_history
+from macagentic.ui.conversation_markdown import (
+    group_status_lines,
+    render_conversation,
+    render_history,
+)
 
 
 def test_projection_renders_display_state_and_optional_tool_output() -> None:
@@ -58,6 +62,74 @@ def test_projection_renders_display_state_and_optional_tool_output() -> None:
     assert "```status" not in rendered_with_tools
     assert "README.md" in rendered_with_tools
     assert '"tool_call_id": "call-1"' in render_history(events)
+
+
+def test_group_status_lines_uses_strict_first_two_words() -> None:
+    assert group_status_lines(
+        [
+            "Reading skills: `gws-gmail` `gws-shared`",
+            "Searching ✉️ `gmail` for `nvidia` threads",
+            "Searching ✉️ `private` for active threads",
+            "Reading ✉️ `a16z` thread",
+            "Reading ✉️ `a16z` email thread",
+            "Reading ✉️ `a16z` thread; searching for `nvidia.com`",
+            "Reading `a16z` thread",
+            "Reading `foo` thread",
+            "Running command",
+            "Running command",
+            "Reading `gws gmail` skill",
+            "Reading `gws shared` skill",
+        ]
+    ) == [
+        "Reading skills: `gws-gmail` `gws-shared`",
+        "Searching ✉️",
+        "├─ `gmail` for `nvidia` threads",
+        "└─ `private` for active threads",
+        "Reading ✉️",
+        "├─ `a16z` thread",
+        "├─ `a16z` email thread",
+        "└─ `a16z` thread; searching for `nvidia.com`",
+        "Reading `a16z` thread",  # Second word differs: no group.
+        "Reading `foo` thread",
+        "Running command",  # Two words only: nothing left for a subpoint.
+        "Running command",
+        "Reading `gws gmail` skill",  # Prefix would split the quoted span.
+        "Reading `gws shared` skill",
+    ]
+
+
+def test_render_conversation_groups_consecutive_status_lines() -> None:
+    def message(call_id: str) -> ConversationEvent:
+        return ConversationEvent(
+            "message",
+            {
+                "role": "assistant",
+                "content": "",
+                "extra": {"actions": [{"tool_call_id": call_id, "command": "x"}]},
+            },
+        )
+
+    events = (
+        message("a"),
+        message("b"),
+        ConversationEvent(
+            "message", {"role": "assistant", "content": "Found it."}
+        ),
+        message("c"),
+    )
+    rendered = render_conversation(
+        events,
+        tool_call_descriptions={
+            "a": "Checking ✉️ `work` inbox",
+            "b": "Checking ✉️ `private` inbox",
+            "c": "Checking ✉️ `spam` folder",
+        },
+    )
+    assert rendered == (
+        "```status\nChecking ✉️\n├─ `work` inbox\n└─ `private` inbox\n```\n\n"
+        "Found it.\n\n"
+        "```status\nChecking ✉️ `spam` folder\n```\n\n"
+    )
 
 
 def test_projection_renders_model_switch() -> None:

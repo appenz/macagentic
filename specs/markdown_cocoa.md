@@ -50,7 +50,8 @@ Spacing uses paragraph attributes rather than visible blank lines.
 - Tables use padded monospace columns, right-align numeric values, bold headers,
   and truncate at the transcript edge.
 - Code blocks and blockquotes over 20 lines show five lines initially, with
-  expand/collapse and `[copy]` links. Status fences render as subdued plain text.
+  expand/collapse and `[copy]` links. Status fences render as subdued plain
+  text; `` `quoted` `` spans drop their backticks and render in italics.
 
 Render metadata retains complete collapsible-block content and rendered ranges
 for block copy and keyboard focus.

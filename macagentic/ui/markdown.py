@@ -12,6 +12,8 @@ from Cocoa import (
     NSBackgroundColorAttributeName,
     NSColor,
     NSFont,
+    NSFontManager,
+    NSItalicFontMask,
     NSFontAttributeName,
     NSForegroundColorAttributeName,
     NSLineBreakByTruncatingTail,
@@ -80,6 +82,27 @@ def _attributed(
     if omit_from_copy:
         attrs[COPY_OMIT_ATTRIBUTE] = True
     return NSAttributedString.alloc().initWithString_attributes_(text, attrs)
+
+
+def _append_status_text(result, text, *, color):
+    """Append a status line; `quoted` spans drop their backticks and render in
+    italics, same color and weight as the surrounding text."""
+    base_font = NSFont.systemFontOfSize_(CODE_FONT_SIZE)
+    subject_font = NSFontManager.sharedFontManager().convertFont_toHaveTrait_(
+        base_font, NSItalicFontMask
+    )
+    style = _paragraph_style()
+    for index, part in enumerate(text.split("`")):
+        if not part:
+            continue
+        result.appendAttributedString_(
+            _attributed(
+                part,
+                color=color,
+                font=subject_font if index % 2 else base_font,
+                style=style,
+            )
+        )
 
 
 def _clean_url(raw):
@@ -588,13 +611,10 @@ class MarkdownRenderer:
             if token.type in {"fence", "code_block"}:
                 block = NSMutableAttributedString.alloc().init()
                 if token.type == "fence" and token.info.strip() == "status":
-                    block.appendAttributedString_(
-                        _attributed(
-                            (token.content or "").strip(),
-                            color=color.colorWithAlphaComponent_(0.55),
-                            font=NSFont.systemFontOfSize_(CODE_FONT_SIZE),
-                            style=_paragraph_style(),
-                        )
+                    _append_status_text(
+                        block,
+                        (token.content or "").strip(),
+                        color=color.colorWithAlphaComponent_(0.55),
                     )
                     blocks.append(("status", block, None))
                     i += 1

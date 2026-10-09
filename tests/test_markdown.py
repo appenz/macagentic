@@ -100,6 +100,23 @@ def test_markdown_renders_status_as_subdued_plain_text() -> None:
     assert _style_at(rendered, "Reading").paragraphSpacingBefore() == 0
 
 
+def test_markdown_status_italicizes_quoted_subjects_without_backticks() -> None:
+    rendered = _render(
+        MarkdownRenderer(),
+        "```status\nReading `a16z` thread\n```",
+        NSColor.blackColor(),
+    )
+
+    text = str(rendered.string())
+    assert text == "Reading a16z thread"
+    subject_font, subject_range = rendered.attribute_atIndex_effectiveRange_(
+        NSFontAttributeName, text.index("a16z"), None
+    )
+    assert "Italic" in str(subject_font.fontName())
+    assert subject_range.location == text.index("a16z")
+    assert subject_range.length == len("a16z")
+
+
 def test_markdown_lists_use_hanging_indents_and_spacing() -> None:
     renderer = MarkdownRenderer()
     rendered = _render(

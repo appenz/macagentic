@@ -282,6 +282,12 @@ Description helpers post
 tool call ID and rendered beside the corresponding call, regardless of the
 order in which descriptions finish.
 
+Consecutive descriptions (no other content between them) share one status
+fence. Runs whose first two space-delimited words match exactly collapse into
+that prefix as a header with each remainder below it as a `├─`/`└─` subpoint.
+Grouping is recomputed from the stored descriptions on every render, so late
+or out-of-order results regroup automatically.
+
 Normal termination persists open tabs and conversations; startup restores them
 when `app.workspace` matches, while runtime and display caches start fresh.
 
@@ -297,6 +303,7 @@ when `app.workspace` matches, while runtime and display caches start fresh.
 - `macagentic/ui/terminal_images.py`: Inline terminal images (see `specs/markdown_cli.md`).
 - `macagentic/ui/updates.py`: Immutable UI update events.
 - `macagentic/ui/helpers/fast_llm.py`: Asynchronous fast-model helper for titles and descriptions.
+- `macagentic/ui/prompts/tool_update.md`: System prompt for tool-call descriptions.
 - `macagentic/ui/helpers/assistant_text.py`: Extract assistant text from model responses.
 - `macagentic/ui/screenshot.py`: Quartz window screenshot capture.
 - `macagentic/ui/screenshot_cli.py`: CLI entry point for screenshot capture.
