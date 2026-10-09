@@ -17,7 +17,7 @@ from typing import Any
 COMMANDS = {"new", "list", "complete", "done"}
 COMMAND_HELP = """Things - CLI for the Things To-Do manager
 Commands:
-  things new "<to-do title>"
+  things new "<to-do title>" [--area "<area or project>"] [--today]
   things list
   things complete <id>"""
 
@@ -54,12 +54,23 @@ def _open_url(command: str, uuid: str | None = None, **parameters: Any) -> None:
         raise RuntimeError(f"Failed to open Things URL: {detail}")
 
 
-def new_todo(title: str) -> None:
+def new_todo(title: str, area: str | None = None, today: bool = False) -> None:
     title = title.strip()
     if not title:
         raise ValueError("A to-do title is required.")
-    _open_url("add", title=title)
-    print(f"Created to-do: {title}")
+    parameters: dict[str, Any] = {"title": title}
+    if area and area.strip():
+        parameters["list"] = area.strip()
+    if today:
+        parameters["when"] = "today"
+    _open_url("add", **parameters)
+    details = []
+    if "list" in parameters:
+        details.append(f"in {parameters['list']}")
+    if today:
+        details.append("today")
+    suffix = f" ({', '.join(details)})" if details else ""
+    print(f"Created to-do: {title}{suffix}")
 
 
 def list_todos() -> None:
@@ -113,6 +124,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     new = commands.add_parser("new", help="Create a to-do")
     new.add_argument("title", help="To-do title")
+    new.add_argument("--area", help="Area or project name to file the to-do under")
+    new.add_argument("--today", action="store_true", help="Schedule the to-do for Today")
 
     commands.add_parser("list", help="List Today's to-dos grouped by area/project")
 
@@ -137,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(arguments)
     try:
         if args.command == "new":
-            new_todo(args.title)
+            new_todo(args.title, args.area, args.today)
         elif args.command == "list":
             list_todos()
         elif args.command in {"complete", "done"}:

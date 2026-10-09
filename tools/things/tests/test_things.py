@@ -137,7 +137,7 @@ def test_no_command_prints_concise_help(capsys) -> None:
     assert capsys.readouterr().out == (
         "Things - CLI for the Things To-Do manager\n"
         "Commands:\n"
-        '  things new "<to-do title>"\n'
+        '  things new "<to-do title>" [--area "<area or project>"] [--today]\n'
         "  things list\n"
         "  things complete <id>\n"
     )
@@ -150,7 +150,7 @@ def test_unknown_command_prints_concise_help(capsys) -> None:
         "Unknown command: wat\n"
         "Things - CLI for the Things To-Do manager\n"
         "Commands:\n"
-        '  things new "<to-do title>"\n'
+        '  things new "<to-do title>" [--area "<area or project>"] [--today]\n'
         "  things list\n"
         "  things complete <id>\n"
     )
