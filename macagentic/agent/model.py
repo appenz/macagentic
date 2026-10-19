@@ -17,16 +17,16 @@ FORMAT_ERROR_TEMPLATE = (
     'through it, e.g. {"command": "websearch \\"query\\""}.'
 )
 MAX_CONTEXT_FILE_BYTES = 20 * 1024 * 1024
-MERCURY_2_5 = "inception/mercury-2.5"
-MERCURY_2_5_METADATA = {
-    "cache_read_input_token_cost": 0.004 / 1_000_000,
-    "input_cost_per_token": 0.04 / 1_000_000,
+MERCURY_3 = "inception/mercury-3"
+MERCURY_3_METADATA = {
+    "cache_read_input_token_cost": 0.02 / 1_000_000,
+    "input_cost_per_token": 0.20 / 1_000_000,
     "litellm_provider": "inception",
-    "max_input_tokens": 260_000,
-    "max_output_tokens": 65_536,
-    "max_tokens": 65_536,
+    "max_input_tokens": 1_000_000,
+    "max_output_tokens": 131_072,
+    "max_tokens": 131_072,
     "mode": "chat",
-    "output_cost_per_token": 0.15 / 1_000_000,
+    "output_cost_per_token": 0.70 / 1_000_000,
     "supports_function_calling": True,
     "supports_parallel_function_calling": True,
     "supports_prompt_caching": True,
@@ -42,7 +42,7 @@ class ResponseModel(LitellmResponseModel):
     def __init__(self, *, context_root: Path | None = None, **kwargs) -> None:
         self.context_root = context_root
         model_name = str(kwargs.get("model_name", ""))
-        if model_name == MERCURY_2_5:
+        if model_name == MERCURY_3:
             _register_mercury_metadata()
         super().__init__(**kwargs)
 
@@ -102,11 +102,11 @@ class ResponseModel(LitellmResponseModel):
 
 def _register_mercury_metadata() -> None:
     try:
-        litellm.get_model_info(MERCURY_2_5)
+        litellm.get_model_info(MERCURY_3)
     except Exception:
-        # LiteLLM 1.91 predates Mercury 2.5. Use Inception's current launch
+        # LiteLLM 1.91 predates Mercury 3. Use Inception's regular (non-launch)
         # pricing until the installed LiteLLM registry includes the model.
-        litellm.register_model({MERCURY_2_5: MERCURY_2_5_METADATA})
+        litellm.register_model({MERCURY_3: MERCURY_3_METADATA})
 
 
 def _context_path(output: dict) -> str | None:

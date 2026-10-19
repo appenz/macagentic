@@ -53,7 +53,7 @@ def test_default_models(tmp_path: Path, monkeypatch) -> None:
     config = load_config(project)
 
     assert config.models == DEFAULT_MODELS
-    assert config.models["fast"] == "inception/mercury-2.5"
+    assert config.models["fast"] == "inception/mercury-3"
     assert config.models["slow"] == "anthropic/claude-fable-5-1"
     assert config.anthropic_api_key == ""
     assert config.inception_api_key == ""

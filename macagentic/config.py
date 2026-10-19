@@ -7,7 +7,7 @@ from typing import Any
 
 MODEL_TIERS = ("fast", "medium", "slow")
 DEFAULT_MODELS = {
-    "fast": "inception/mercury-2.5",
+    "fast": "inception/mercury-3",
     "medium": "openai/gpt-6.1-sol",
     "slow": "anthropic/claude-fable-5-1",
 }

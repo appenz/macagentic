@@ -8,8 +8,8 @@ from macagentic.agent import Agent, ConversationLog, ResponseModel
 from macagentic.agent.agent import load_system_prompt
 from macagentic.agent.model import (
     CONTEXT_FILE_TYPE,
-    MERCURY_2_5,
-    MERCURY_2_5_METADATA,
+    MERCURY_3,
+    MERCURY_3_METADATA,
 )
 from macagentic.agent.skills import Skill, SkillCatalog
 
@@ -335,10 +335,10 @@ def test_response_model_registers_missing_mercury_metadata(monkeypatch) -> None:
         registered.append,
     )
 
-    model = ResponseModel(model_name=MERCURY_2_5)
+    model = ResponseModel(model_name=MERCURY_3)
 
-    assert model.model_name == MERCURY_2_5
-    assert registered == [{MERCURY_2_5: MERCURY_2_5_METADATA}]
+    assert model.model_name == MERCURY_3
+    assert registered == [{MERCURY_3: MERCURY_3_METADATA}]
 
 
 def test_agent_copies_every_message_into_conversation_log(
